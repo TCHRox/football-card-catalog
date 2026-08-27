@@ -111,7 +111,7 @@ p { color: var(--muted); line-height: 1.6; }
 
 .stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 12px;
   margin-bottom: 28px;
 }
@@ -333,4 +333,27 @@ footer {
   .card-name { font-size: 1.28rem; }
   .card-subtitle { font-size: .76rem; }
   .detail-table { grid-template-columns: 1fr; }
+}
+
+
+/* v4 — compact catalog header */
+.catalog-status {
+  padding: 30px 0 20px;
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: center;
+}
+.catalog-status p {
+  margin: 7px 0 0;
+  color: var(--muted);
+  font-size: .88rem;
+}
+.card-subtitle:empty { display: none; }
+
+@media (max-width: 620px) {
+  .catalog-status {
+    padding-top: 24px;
+    align-items: flex-start;
+  }
 }

@@ -143,3 +143,14 @@ football-card-catalog/
    └─ functions/
       └─ cards.mjs
 ```
+
+
+## v4 changes
+
+- Improved automatic recognition of Player / Player Name / Player(s) / Athlete / Subject columns.
+- Player name is now always the large white card title; set/product is never used as a fallback player name.
+- Removed `#` from the displayed card-number line.
+- Removed the generic `Football Card` subtitle.
+- Removed the large hero tagline.
+- Removed the Players summary card.
+- Added `card-images.json`, which lets internet-sourced card photos be attached without modifying the Google Sheet.
