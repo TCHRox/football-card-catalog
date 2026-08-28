@@ -442,3 +442,33 @@ Keep:
 - `PARSE_API_KEY`
 
 `THE_CARD_API_KEY` remains unused and can stay deleted.
+
+
+## v20 — 1W / 1M price-history tabs
+
+- Added chart ranges:
+  - 1W
+  - 1M
+  - 1Y
+  - 5Y
+  - All
+- 1Y is now the default.
+- 1W and 1M use actual dated recent completed-sale records because the
+  SportsCardsPro long-term trend is monthly and is not granular enough for
+  week/month views.
+- 1Y, 5Y, and All continue using SportsCardsPro's historical ungraded
+  market-trend series.
+- If recent sales are still loading, the 1W/1M chart area shows a loading
+  state and updates automatically when the sales request completes.
+
+## eBay data-source decision
+
+v20 keeps SportsCardsPro via Parse for recent-sales data rather than directly
+scraping eBay. eBay's public Browse API is designed around purchasable/current
+inventory. eBay's sales-history Marketplace Insights API is restricted and is
+not open to new users, so there is not a straightforward supported eBay sold
+comps API we can switch this project to.
+
+Directly scraping the eBay sold-results web page would be more brittle than the
+current managed source and would add another site-specific anti-bot/parser
+dependency.

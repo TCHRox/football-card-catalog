@@ -959,3 +959,22 @@ footer {
   outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
+
+
+/* v20 short-range price-history tabs */
+.chart-range-controls {
+  flex-wrap: wrap;
+}
+.chart-sales-loading {
+  min-height: 210px;
+}
+@media (max-width: 620px) {
+  .chart-range-controls {
+    width: 100%;
+    justify-content: space-between;
+  }
+  .chart-range-button {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+}

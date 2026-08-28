@@ -1238,11 +1238,66 @@ function filterTrendForRange(points, range) {
   if (!sorted.length || range === "all") return sorted;
 
   const newest = Date.parse(sorted[sorted.length - 1].date);
-  const years = range === "1y" ? 1 : 5;
   const cutoff = new Date(newest);
-  cutoff.setFullYear(cutoff.getFullYear() - years);
+
+  if (range === "1y") {
+    cutoff.setFullYear(cutoff.getFullYear() - 1);
+  } else if (range === "5y") {
+    cutoff.setFullYear(cutoff.getFullYear() - 5);
+  } else {
+    return sorted;
+  }
 
   return sorted.filter(p => Date.parse(p.date) >= cutoff.getTime());
+}
+
+function filterSalesForDays(sales, days) {
+  const sorted = (sales || [])
+    .map(sale => ({
+      ...sale,
+      _timestamp: Date.parse(sale.date),
+      numericPrice: Number(
+        sale.numericPrice !== undefined && sale.numericPrice !== null
+          ? sale.numericPrice
+          : String(sale.price || "").replace(/[$,]/g, "")
+      )
+    }))
+    .filter(sale => Number.isFinite(sale._timestamp) && Number.isFinite(sale.numericPrice))
+    .sort((a,b) => a._timestamp - b._timestamp);
+
+  if (!sorted.length) return [];
+
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+  return sorted.filter(sale => sale._timestamp >= cutoff);
+}
+
+function chartSeriesForRange(data, range) {
+  if (range === "1w") {
+    return {
+      points: filterSalesForDays(data.sales || [], 7),
+      title: "Recent ungraded sales",
+      subtitle: "Completed sales from the last 7 days",
+      usesSales: true
+    };
+  }
+
+  if (range === "1m") {
+    return {
+      points: filterSalesForDays(data.sales || [], 30),
+      title: "Recent ungraded sales",
+      subtitle: "Completed sales from the last 30 days",
+      usesSales: true
+    };
+  }
+
+  const points = filterTrendForRange(data.trend || [], range);
+
+  return {
+    points,
+    title: "Ungraded market trend",
+    subtitle: "",
+    usesSales: false
+  };
 }
 
 function trendDepthLabel(points) {
@@ -1309,8 +1364,9 @@ function renderMarketData(data, cardKeyValue) {
   const recent = data.sales || [];
   const gradeCards = preferredGradeCards(data.prices);
   const allTrend = data.trend || [];
-  const selectedRange = marketRangeByCard.get(cardKeyValue) || "5y";
-  const chartPoints = filterTrendForRange(allTrend, selectedRange);
+  const selectedRange = marketRangeByCard.get(cardKeyValue) || "1y";
+  const chartSeries = chartSeriesForRange(data, selectedRange);
+  const chartPoints = chartSeries.points;
 
   const avg = recent.length
     ? recent.reduce((sum,s) => sum + Number(s.numericPrice || 0), 0) / recent.length
@@ -1352,12 +1408,18 @@ function renderMarketData(data, cardKeyValue) {
         <div class="market-section-heading chart-heading-with-controls">
           <div>
             <div class="section-kicker">PRICE HISTORY</div>
-            <h3>Ungraded market trend</h3>
-            ${historyDepth ? `<span class="history-depth">${escapeHtml(historyDepth)} available</span>` : ""}
+            <h3>${escapeHtml(chartSeries.title)}</h3>
+            ${chartSeries.subtitle
+              ? `<span class="history-depth">${escapeHtml(chartSeries.subtitle)}</span>`
+              : historyDepth
+                ? `<span class="history-depth">${escapeHtml(historyDepth)} available</span>`
+                : ""}
           </div>
 
           <div class="chart-range-controls" role="group" aria-label="Chart range">
             ${[
+              ["1w", "1W"],
+              ["1m", "1M"],
               ["1y", "1Y"],
               ["5y", "5Y"],
               ["all", "All"]
@@ -1370,7 +1432,12 @@ function renderMarketData(data, cardKeyValue) {
           </div>
         </div>
 
-        ${chartSvg(chartPoints)}
+        ${chartSeries.usesSales && data.salesPending
+          ? `<div class="sales-loading-row chart-sales-loading">
+              <span class="market-spinner" aria-hidden="true"></span>
+              <span>Loading recent sales for this range…</span>
+            </div>`
+          : chartSvg(chartPoints)}
       </div>
 
       <div class="grade-section">
@@ -1438,7 +1505,7 @@ function renderMarketData(data, cardKeyValue) {
 function attachMarketRangeEvents(data, cardKeyValue) {
   document.querySelectorAll("[data-market-range]").forEach(button => {
     button.addEventListener("click", () => {
-      marketRangeByCard.set(cardKeyValue, button.dataset.marketRange || "5y");
+      marketRangeByCard.set(cardKeyValue, button.dataset.marketRange || "1y");
 
       const target = $("market-content");
       if (!target) return;
