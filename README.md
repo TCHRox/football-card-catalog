@@ -31,3 +31,15 @@ De'Von Achane 2023 Phoenix Base 130
 
 based on the Sports Card Investor page:
 https://www.sportscardinvestor.com/cards/de-von-achane-football/2023-phoenix-base-130
+
+
+## v6 changes
+
+- Player names now use spreadsheet-style fill-down behavior.
+- If Column A (first name) or Column B (last name) is blank, the site uses the most recent nonblank value above it.
+- This means all cards beneath a player heading remain assigned to that player until a new name appears.
+- Example behavior supplied for verification:
+  - Row 15 inherits Davante Adams
+  - Row 37 inherits Troy Aikman
+  - Row 74 inherits Josh Allen
+- The inherited names are also used for image matching and search.

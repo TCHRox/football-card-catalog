@@ -92,6 +92,53 @@ function fullName(row) {
   return joined || "Unknown Player";
 }
 
+// The spreadsheet lists a player's name once, then leaves columns A/B blank
+// for the following cards belonging to that player. Carry the most recent
+// nonblank first and last names downward so every card row has a player.
+function inheritPlayerNames(sourceRows) {
+  const firstHeader = mapping.firstName;
+  const lastHeader = mapping.lastName;
+  const playerHeader = mapping.player;
+
+  let previousFirst = "";
+  let previousLast = "";
+  let previousPlayer = "";
+
+  return sourceRows.map(originalRow => {
+    const row = { ...originalRow };
+
+    // If the sheet ever has a single full-name column, support the same behavior.
+    if (playerHeader) {
+      const currentPlayer = String(row[playerHeader] ?? "").trim();
+      if (currentPlayer) {
+        previousPlayer = currentPlayer;
+      } else if (previousPlayer) {
+        row[playerHeader] = previousPlayer;
+      }
+    }
+
+    if (firstHeader) {
+      const currentFirst = String(row[firstHeader] ?? "").trim();
+      if (currentFirst) {
+        previousFirst = currentFirst;
+      } else if (previousFirst) {
+        row[firstHeader] = previousFirst;
+      }
+    }
+
+    if (lastHeader) {
+      const currentLast = String(row[lastHeader] ?? "").trim();
+      if (currentLast) {
+        previousLast = currentLast;
+      } else if (previousLast) {
+        row[lastHeader] = previousLast;
+      }
+    }
+
+    return row;
+  });
+}
+
 function yesNoIsTrue(value) {
   const v = norm(value);
   return ["y", "yes", "true", "1", "rc"].includes(v);
@@ -348,11 +395,14 @@ async function loadCards() {
       ? await manifestResponse.json()
       : {};
 
-    rows = payload.rows || [];
-    if (!rows.length) throw new Error("The sheet connected, but no card rows were found.");
+    const sourceRows = payload.rows || [];
+    if (!sourceRows.length) throw new Error("The sheet connected, but no card rows were found.");
 
-    const headers = payload.headers || Object.keys(rows[0] || {});
+    const headers = payload.headers || Object.keys(sourceRows[0] || {});
     mapping = mapHeaders(headers);
+
+    // v6: fill down player names from the most recent nonblank cells above.
+    rows = inheritPlayerNames(sourceRows);
 
     updateStats();
     setOptions("year-filter", rows.map(r=>field(r,"year")), "All years");
