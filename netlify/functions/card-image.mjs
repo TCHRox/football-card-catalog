@@ -1,305 +1,158 @@
-const DEFAULT_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
-  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
-  "Accept-Language": "en-US,en;q=0.9"
-};
+const SERPER_ENDPOINT = "https://google.serper.dev/images";
 
-const SEARCH_HEADERS = {
-  ...DEFAULT_HEADERS,
-  "Referer": "https://www.sportscardinvestor.com/cards"
-};
+const SOURCE_PRIORITIES = [
+  ["sportscardinvestor.com", 35],
+  ["comc.com", 24],
+  ["sportscardspro.com", 22],
+  ["beckett.com", 18],
+  ["ebay.com", 12],
+  ["130point.com", 10]
+];
 
-function slugify(value, apostropheMode = "separator") {
-  let text = String(value ?? "")
+function normalize(value) {
+  return String(value ?? "")
     .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "");
-
-  text = apostropheMode === "separator"
-    ? text.replace(/[’']/g, "-")
-    : text.replace(/[’']/g, "");
-
-  return text
-    .replace(/\./g, "")
-    .replace(/&/g, " and ")
-    .replace(/[^a-zA-Z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .replace(/-+/g, "-")
-    .toLowerCase();
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[’']/g, "")
+    .toLowerCase()
+    .replace(/[^a-z0-9#]+/g, " ")
+    .trim();
 }
 
-function normalizeBrandVariants(brand) {
-  const raw = String(brand || "").trim();
-  const cleanPanini = raw.replace(/^panini\s+/i, "").trim();
-  const variants = new Set([raw, cleanPanini]);
+function words(value) {
+  return normalize(value).split(/\s+/).filter(Boolean);
+}
 
-  const lower = cleanPanini.toLowerCase();
+function hasAll(haystack, values) {
+  const text = normalize(haystack);
+  return values.every(v => text.includes(normalize(v)));
+}
 
-  // Common collection-sheet wording vs Sports Card Investor set names.
-  if (lower === "donruss optics" || lower === "donruss optic" || lower === "optic") {
-    variants.add("Optic");
-    variants.add("Donruss Optic");
+function domainScore(domain) {
+  const d = String(domain || "").toLowerCase();
+  for (const [needle, score] of SOURCE_PRIORITIES) {
+    if (d.includes(needle)) return score;
+  }
+  return 0;
+}
+
+function scoreResult(result, card) {
+  const title = String(result.title || "");
+  const domain = String(result.domain || "");
+  const combined = `${title} ${result.link || ""} ${domain}`;
+  const normalizedCombined = normalize(combined);
+
+  let score = domainScore(domain);
+
+  const playerTokens = words(card.player);
+  const brandTokens = words(card.brand);
+  const typeTokens = words(card.type);
+  const noteTokens = words(card.notes).slice(0, 5);
+
+  if (playerTokens.length && playerTokens.every(t => normalizedCombined.includes(t))) score += 24;
+  else if (playerTokens.some(t => normalizedCombined.includes(t))) score += 7;
+
+  if (card.year && normalizedCombined.includes(normalize(card.year))) score += 9;
+
+  if (brandTokens.length && brandTokens.every(t => normalizedCombined.includes(t))) score += 11;
+  else if (brandTokens.some(t => normalizedCombined.includes(t))) score += 4;
+
+  const number = String(card.number || "").trim();
+  if (number) {
+    const numberPatterns = [
+      `#${number}`.toLowerCase(),
+      ` ${number} `,
+      `-${number}`,
+      `/${number}`
+    ];
+    if (numberPatterns.some(p => String(combined).toLowerCase().includes(p))) score += 18;
   }
 
-  if (lower === "donruss") variants.add("Donruss");
-  if (lower === "prizm") variants.add("Prizm");
-  if (lower === "score") variants.add("Score");
-  if (lower === "phoenix") variants.add("Phoenix");
-  if (lower === "absolute") variants.add("Absolute");
-  if (lower === "select") variants.add("Select");
-  if (lower === "mosaic") variants.add("Mosaic");
-  if (lower === "prestige") variants.add("Prestige");
+  if (typeTokens.length && typeTokens.some(t => normalizedCombined.includes(t))) score += 7;
+  if (noteTokens.length && noteTokens.some(t => normalizedCombined.includes(t))) score += 5;
 
-  return [...variants]
-    .map(v => slugify(v))
-    .filter(Boolean);
-}
-
-function usefulNotesVariants(notes) {
-  const raw = String(notes || "").trim();
-  if (!raw) return [];
-
-  return raw
-    .split(/[;,|]+/)
-    .map(v => v.trim())
-    .filter(v => v && v.length <= 60);
-}
-
-function typeVariants(type, notes) {
-  const raw = String(type || "").trim();
-  const variants = new Set();
-
-  if (raw) {
-    variants.add(raw);
-    variants.add(raw.replace(/\bset\b/ig, "").trim());
-    variants.add(raw.replace(/\bcard\b/ig, "").trim());
+  if (String(card.rookie).toUpperCase() === "Y" &&
+      /\b(rc|rookie)\b/i.test(title)) {
+    score += 4;
   }
 
-  if (/^base set$/i.test(raw) || /^base$/i.test(raw)) variants.add("base");
-
-  // "Parallel" by itself is not specific enough. Notes may contain the
-  // actual parallel name, such as Silver, Refractor, Green, etc.
-  if (/^parallel$/i.test(raw)) {
-    for (const note of usefulNotesVariants(notes)) variants.add(note);
+  // Prefer a normal portrait card-shaped image.
+  const width = Number(result.imageWidth || 0);
+  const height = Number(result.imageHeight || 0);
+  if (width > 0 && height > 0) {
+    const ratio = width / height;
+    if (ratio >= 0.52 && ratio <= 0.86) score += 8;
+    else if (ratio > 1.05) score -= 8;
   }
 
-  // Always keep a Base candidate for rows explicitly identified as Base.
-  if (/base/i.test(raw)) variants.add("base");
-
-  return [...variants].filter(Boolean);
-}
-
-function buildCandidateUrls({ player, year, brand, type, number, notes }) {
-  const playerSlugs = [
-    slugify(`${player}-football`, "separator"),
-    slugify(`${player}-football`, "remove")
-  ].filter(Boolean);
-
-  const brandSlugs = normalizeBrandVariants(brand);
-  const num = String(number || "").trim();
-  const urls = new Set();
-  const typeList = typeVariants(type, notes);
-
-  for (const playerSlug of [...new Set(playerSlugs)]) {
-    for (const brandSlug of [...new Set(brandSlugs)]) {
-      for (const variant of typeList) {
-        const typeSlug = slugify(variant);
-
-        if (playerSlug && year && brandSlug && typeSlug && num) {
-          urls.add(`https://www.sportscardinvestor.com/cards/${playerSlug}/${year}-${brandSlug}-${typeSlug}-${num}`);
-        }
-      }
-
-      // Some SCI pages omit a variant token.
-      if (playerSlug && year && brandSlug && num) {
-        urls.add(`https://www.sportscardinvestor.com/cards/${playerSlug}/${year}-${brandSlug}-${num}`);
-      }
-
-      // Only use Base as a safe fallback when the row itself says Base.
-      if (/base/i.test(String(type || "")) && playerSlug && year && brandSlug && num) {
-        urls.add(`https://www.sportscardinvestor.com/cards/${playerSlug}/${year}-${brandSlug}-base-${num}`);
-      }
-    }
-  }
-
-  return [...urls].slice(0, 10);
-}
-
-function extractImageUrl(html) {
-  if (!html) return "";
-
-  const patterns = [
-    /<meta[^>]+property=["']og:image["'][^>]+content=["']([^"']+)["']/i,
-    /<meta[^>]+name=["']twitter:image["'][^>]+content=["']([^"']+)["']/i,
-    /(https:\/\/images\.production\.sportscardinvestor\.com\/[^"' <]+)/i
+  // Avoid likely wrong product formats.
+  const penalties = [
+    [/\blot\b/i, 18],
+    [/\bteam set\b/i, 15],
+    [/\bcomplete set\b/i, 15],
+    [/\byou pick\b/i, 14],
+    [/\bpick your\b/i, 14],
+    [/\breprint\b/i, 18],
+    [/\bcustom\b/i, 18],
+    [/\bdigital\b/i, 20],
+    [/\bback\b/i, 5]
   ];
 
-  for (const pattern of patterns) {
-    const match = html.match(pattern);
-    if (match && match[1]) return match[1].replace(/&amp;/g, "&");
+  for (const [pattern, penalty] of penalties) {
+    if (pattern.test(title)) score -= penalty;
   }
 
-  return "";
-}
-
-function looksLikeSciCardPage(html, { player, year, number }) {
-  const text = String(html || "").toLowerCase();
-  const playerBits = String(player || "").toLowerCase()
-    .replace(/[’']/g, "")
-    .split(/\s+/)
-    .filter(Boolean);
-
-  const playerMatch = playerBits.every(bit => text.includes(bit));
-  const yearMatch = !year || text.includes(String(year).toLowerCase());
-  const numberMatch = !number ||
-    text.includes(`#${String(number).toLowerCase()}`) ||
-    text.includes(`>${String(number).toLowerCase()}<`) ||
-    text.includes(` ${String(number).toLowerCase()} `);
-
-  return playerMatch && yearMatch && numberMatch;
-}
-
-async function fetchPage(url, headers = DEFAULT_HEADERS) {
-  const response = await fetch(url, {
-    headers,
-    redirect: "follow"
-  });
-
-  if ([403, 429, 503].includes(response.status)) {
-    return {
-      rateLimited: true,
-      status: response.status,
-      retryAfterMs: Math.max(
-        5000,
-        Number(response.headers.get("retry-after") || 0) * 1000
-      )
-    };
-  }
-
-  if (!response.ok) return { found: false, status: response.status };
-
-  const html = await response.text();
-  return { found: true, html, finalUrl: response.url || url };
-}
-
-async function trySciUrl(url, card) {
-  const page = await fetchPage(url);
-
-  if (page.rateLimited) return page;
-  if (!page.found) return null;
-
-  const imageUrl = extractImageUrl(page.html);
-  if (!imageUrl) return null;
-
-  // Avoid accepting unrelated soft-404 or redirect pages.
-  if (!looksLikeSciCardPage(page.html, card)) return null;
-
-  return {
-    imageUrl,
-    sourcePage: page.finalUrl || url,
-    source: "Sports Card Investor"
-  };
-}
-
-function decodeDuckDuckGoResultUrl(value) {
-  try {
-    let url = String(value || "").replace(/&amp;/g, "&");
-
-    if (url.startsWith("//")) url = `https:${url}`;
-
-    const parsed = new URL(url, "https://html.duckduckgo.com");
-
-    if (parsed.hostname.includes("duckduckgo.com") && parsed.searchParams.get("uddg")) {
-      return decodeURIComponent(parsed.searchParams.get("uddg"));
-    }
-
-    return parsed.href;
-  } catch {
-    return "";
-  }
-}
-
-function extractSciSearchResultUrls(html) {
-  const urls = new Set();
-
-  const hrefPattern = /href=["']([^"']+)["']/gi;
-  let match;
-
-  while ((match = hrefPattern.exec(html))) {
-    const decoded = decodeDuckDuckGoResultUrl(match[1]);
-    if (/^https:\/\/www\.sportscardinvestor\.com\/cards\//i.test(decoded)) {
-      urls.add(decoded.replace(/[?#].*$/, ""));
-    }
-  }
-
-  // Also catch SCI URLs that appear as plain text in the search HTML.
-  const rawPattern = /https:\/\/www\.sportscardinvestor\.com\/cards\/[a-zA-Z0-9\-_/]+/gi;
-  while ((match = rawPattern.exec(html))) {
-    urls.add(match[0].replace(/[?#].*$/, ""));
-  }
-
-  return [...urls];
-}
-
-function scoreSciUrl(url, { player, year, brand, type, number, notes }) {
-  const haystack = slugify(url);
-  const tokens = [
-    ...String(player || "").split(/\s+/),
-    year,
-    ...String(brand || "").split(/\s+/),
-    number,
-    ...String(type || "").split(/\s+/),
-    ...usefulNotesVariants(notes).flatMap(v => v.split(/\s+/))
-  ]
-    .map(slugify)
-    .filter(Boolean);
-
-  let score = 0;
-  for (const token of tokens) {
-    if (haystack.includes(token)) score += 1;
-  }
-
-  if (number && haystack.endsWith(`-${slugify(number)}`)) score += 4;
-  if (year && haystack.includes(slugify(year))) score += 2;
+  // The collection currently appears to be raw cards, so slab images are less desirable.
+  if (/\b(psa|bgs|sgc|cgc|graded|slab)\b/i.test(title)) score -= 10;
 
   return score;
 }
 
-async function searchSci(card) {
-  const query = [
+function buildQuery(card) {
+  const parts = [
     `"${card.player}"`,
     card.year,
     card.brand,
     card.type,
-    card.number,
+    card.number ? `#${card.number}` : "",
+    String(card.rookie).toUpperCase() === "Y" ? "rookie RC" : "",
     card.notes,
-    "site:sportscardinvestor.com/cards"
-  ].filter(Boolean).join(" ");
+    "football card"
+  ];
+  return parts.filter(Boolean).join(" ");
+}
 
-  const searchUrl =
-    `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+function pickBest(images, card) {
+  const ranked = (images || [])
+    .map(result => ({
+      ...result,
+      _score: scoreResult(result, card)
+    }))
+    .filter(result => result.imageUrl || result.thumbnailUrl)
+    .sort((a, b) => b._score - a._score);
 
-  const result = await fetchPage(searchUrl, SEARCH_HEADERS);
+  // Refuse very weak matches instead of confidently showing the wrong card.
+  const best = ranked[0];
+  if (!best || best._score < 35) return null;
 
-  if (result.rateLimited) return result;
-  if (!result.found) return null;
-
-  const candidates = extractSciSearchResultUrls(result.html)
-    .sort((a, b) => scoreSciUrl(b, card) - scoreSciUrl(a, card))
-    .slice(0, 4);
-
-  for (const candidate of candidates) {
-    const hit = await trySciUrl(candidate, card);
-    if (hit?.rateLimited) return hit;
-    if (hit?.imageUrl) return hit;
-  }
-
-  return null;
+  return best;
 }
 
 export default async (request) => {
   try {
-    const url = new URL(request.url);
+    const apiKey = process.env.SERPER_API_KEY;
 
+    if (!apiKey) {
+      return new Response(JSON.stringify({
+        error: "SERPER_API_KEY is not configured.",
+        code: "SERPER_NOT_CONFIGURED"
+      }), {
+        status: 503,
+        headers: { "content-type": "application/json; charset=utf-8" }
+      });
+    }
+
+    const url = new URL(request.url);
     const card = {
       player: url.searchParams.get("player") || "",
       year: url.searchParams.get("year") || "",
@@ -312,79 +165,77 @@ export default async (request) => {
 
     if (!card.player || !card.year || !card.brand || !card.number) {
       return new Response(JSON.stringify({
-        error: "Missing required query parameters."
+        error: "Missing player, year, brand, or card number."
       }), {
         status: 400,
         headers: { "content-type": "application/json; charset=utf-8" }
       });
     }
 
-    // 1. Fast path: construct likely SCI URLs.
-    const candidates = buildCandidateUrls(card);
+    const searchResponse = await fetch(SERPER_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "X-API-KEY": apiKey,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        q: buildQuery(card),
+        gl: "us",
+        hl: "en",
+        num: 20
+      })
+    });
 
-    for (const candidate of candidates) {
-      const result = await trySciUrl(candidate, card);
-
-      if (result?.rateLimited) {
-        return new Response(JSON.stringify({
-          error: "Sports Card Investor temporarily rate limited the lookup.",
-          retryAfterMs: result.retryAfterMs || 7000
-        }), {
-          status: 429,
-          headers: {
-            "content-type": "application/json; charset=utf-8",
-            "retry-after": String(Math.ceil((result.retryAfterMs || 7000) / 1000))
-          }
-        });
-      }
-
-      if (result?.imageUrl) {
-        return new Response(JSON.stringify(result), {
-          status: 200,
-          headers: {
-            "content-type": "application/json; charset=utf-8",
-            "cache-control": "public, max-age=86400"
-          }
-        });
-      }
-    }
-
-    // 2. Fallback: web-search specifically for a matching SCI card page.
-    const searched = await searchSci(card);
-
-    if (searched?.rateLimited) {
+    if (!searchResponse.ok) {
+      const text = await searchResponse.text();
       return new Response(JSON.stringify({
-        error: "Image lookup temporarily rate limited.",
-        retryAfterMs: searched.retryAfterMs || 7000
+        error: `Image search provider returned ${searchResponse.status}.`,
+        providerBody: text.slice(0, 300)
       }), {
-        status: 429,
+        status: 502,
+        headers: { "content-type": "application/json; charset=utf-8" }
+      });
+    }
+
+    const data = await searchResponse.json();
+    const best = pickBest(data.images || [], card);
+
+    if (!best) {
+      return new Response(JSON.stringify({
+        imageUrl: "",
+        sourcePage: "",
+        source: "",
+        matchTitle: "",
+        query: buildQuery(card)
+      }), {
+        status: 404,
         headers: {
           "content-type": "application/json; charset=utf-8",
-          "retry-after": String(Math.ceil((searched.retryAfterMs || 7000) / 1000))
+          "Cache-Control": "public, max-age=3600",
+          "Netlify-CDN-Cache-Control": "public, durable, max-age=3600"
         }
       });
     }
 
-    if (searched?.imageUrl) {
-      return new Response(JSON.stringify(searched), {
-        status: 200,
-        headers: {
-          "content-type": "application/json; charset=utf-8",
-          "cache-control": "public, max-age=86400"
-        }
-      });
-    }
+    // Google-cached thumbnails are substantially more reliable for embedding
+    // than arbitrary seller/site hotlinks. Keep the original URL for future detail views.
+    const displayUrl = best.thumbnailUrl || best.imageUrl;
 
     return new Response(JSON.stringify({
-      imageUrl: "",
-      sourcePage: "",
-      source: "",
-      tried: candidates
+      imageUrl: displayUrl,
+      originalImageUrl: best.imageUrl || "",
+      sourcePage: best.link || "",
+      source: best.source || best.domain || "",
+      domain: best.domain || "",
+      matchTitle: best.title || "",
+      matchScore: best._score,
+      query: buildQuery(card)
     }), {
-      status: 404,
+      status: 200,
       headers: {
         "content-type": "application/json; charset=utf-8",
-        "cache-control": "public, max-age=3600"
+        "Cache-Control": "public, max-age=2592000",
+        "Netlify-CDN-Cache-Control": "public, durable, max-age=2592000"
       }
     });
 

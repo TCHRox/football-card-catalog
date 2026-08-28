@@ -83,3 +83,30 @@ https://www.sportscardinvestor.com/cards/de-von-achane-football/2023-phoenix-bas
 - Added common set-name normalization, including `Donruss Optics` -> `Optic` / `Donruss Optic`.
 - Column O notes are now included in image matching and can help identify named parallels.
 - If the direct Sports Card Investor URL pattern fails, the server performs a web search restricted to Sports Card Investor and verifies the resulting card page before using its image.
+
+
+## v10 changes
+
+- Replaced direct Sports Card Investor scraping with the Serper Google Images API.
+- Image searches now run in parallel (up to 10 at once), so visible cards can populate together.
+- Sports Card Investor is still the preferred result source when it appears.
+- Other card-specific sources such as COMC and SportsCardsPro are scored as fallbacks.
+- Exact player, year, brand, number, type, rookie status, and notes are used to rank results.
+- Weak/ambiguous results are rejected rather than displaying a likely wrong card.
+- Google-cached thumbnails are used for the grid because they are more reliable to embed than arbitrary seller hotlinks.
+- Successful responses are cacheable for 30 days.
+
+### Required Netlify setup
+
+Create a Serper account at https://serper.dev and copy your API key.
+
+In Netlify:
+1. Open the football-card-catalog site.
+2. Go to Site configuration.
+3. Open Environment variables.
+4. Add a variable named `SERPER_API_KEY`.
+5. Paste your Serper API key as the value.
+6. Save.
+7. Go to Deploys and trigger a new deploy.
+
+Do not put the API key directly into app.js or commit it to GitHub.

@@ -3,10 +3,9 @@ const CONFIG = {
   dataEndpoint: "/.netlify/functions/cards",
   imageManifest: "/card-images.json",
   autoImageEndpoint: "/.netlify/functions/card-image",
-  imageCacheStorageKey: "football-card-archive-image-cache-v2",
-  imageLookupDelayMs: 1400,
-  imageRateLimitRetryMs: 7000,
-  imageLookupMaxRetries: 2
+  imageCacheStorageKey: "football-card-archive-image-cache-v3",
+  imageLookupConcurrency: 10,
+  imageLookupMaxRetries: 1
 };
 
 const ALIASES = {
@@ -56,8 +55,7 @@ const pendingImageKeys = new Set();
 const queuedImageKeys = new Set();
 const imageLookupQueue = [];
 const imageRetryCount = new Map();
-let imageQueueRunning = false;
-let lastImageLookupStartedAt = 0;
+let activeImageLookups = 0;
 
 const $ = (id) => document.getElementById(id);
 const norm = (s) => String(s ?? "")
@@ -263,8 +261,10 @@ function imageLookupRecentlyFailed(key) {
 function setCachedAutoImage(key, payload) {
   autoImageCache[key] = {
     imageUrl: payload.imageUrl || "",
+    originalImageUrl: payload.originalImageUrl || "",
     sourcePage: payload.sourcePage || "",
-    source: payload.source || "Sports Card Investor",
+    source: payload.source || "",
+    matchTitle: payload.matchTitle || "",
     cachedAt: new Date().toISOString(),
     retryAfter: 0
   };
@@ -448,10 +448,6 @@ function updatePlaceholdersForKey(key, imageUrl) {
   });
 }
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 async function fetchAutoImageForRow(row) {
   const key = cardKey(row);
   if (!key) return { status: "skip" };
@@ -484,7 +480,7 @@ async function fetchAutoImageForRow(row) {
     });
 
     const response = await fetch(`${CONFIG.autoImageEndpoint}?${params.toString()}`, {
-      cache: "no-store"
+      cache: "default"
     });
 
     let payload = {};
@@ -501,17 +497,15 @@ async function fetchAutoImageForRow(row) {
       return { status: "found" };
     }
 
-    if (response.status === 429 || response.status === 403 || response.status === 503) {
-      return {
-        status: "rate-limited",
-        retryAfterMs: Number(payload.retryAfterMs || CONFIG.imageRateLimitRetryMs)
-      };
-    }
-
     if (response.status === 404) {
-      setCachedAutoImageMiss(key, 12);
+      setCachedAutoImageMiss(key, 24);
       imageRetryCount.delete(key);
       return { status: "not-found" };
+    }
+
+    if (response.status === 503 && payload.code === "SERPER_NOT_CONFIGURED") {
+      console.warn("Serper API key has not been configured in Netlify.");
+      return { status: "not-configured" };
     }
 
     return { status: "error" };
@@ -527,8 +521,9 @@ function enqueueAutoImage(row, priority = false) {
   const key = cardKey(row);
   if (!key) return;
 
-  if (imageUrlFor(row)) {
-    updatePlaceholdersForKey(key, imageUrlFor(row));
+  const existing = imageUrlFor(row);
+  if (existing) {
+    updatePlaceholdersForKey(key, existing);
     return;
   }
 
@@ -546,45 +541,37 @@ function enqueueAutoImage(row, priority = false) {
   processImageQueue();
 }
 
-async function processImageQueue() {
-  if (imageQueueRunning) return;
-  imageQueueRunning = true;
+function processImageQueue() {
+  while (
+    activeImageLookups < CONFIG.imageLookupConcurrency &&
+    imageLookupQueue.length
+  ) {
+    const row = imageLookupQueue.shift();
+    const key = cardKey(row);
+    queuedImageKeys.delete(key);
 
-  try {
-    while (imageLookupQueue.length) {
-      const row = imageLookupQueue.shift();
-      const key = cardKey(row);
-      queuedImageKeys.delete(key);
-
-      if (!key || imageUrlFor(row) || imageLookupRecentlyFailed(key)) continue;
-
-      const elapsed = Date.now() - lastImageLookupStartedAt;
-      const waitMs = Math.max(0, CONFIG.imageLookupDelayMs - elapsed);
-      if (waitMs) await sleep(waitMs);
-
-      lastImageLookupStartedAt = Date.now();
-      const result = await fetchAutoImageForRow(row);
-
-      if (result.status === "rate-limited") {
-        const attempts = imageRetryCount.get(key) || 0;
-
-        if (attempts < CONFIG.imageLookupMaxRetries) {
-          imageRetryCount.set(key, attempts + 1);
-          await sleep(Math.max(
-            CONFIG.imageRateLimitRetryMs,
-            Number(result.retryAfterMs || 0)
-          ));
-          enqueueAutoImage(row, true);
-        } else {
-          imageRetryCount.delete(key);
-        }
-      }
+    if (!key || imageUrlFor(row) || imageLookupRecentlyFailed(key)) {
+      continue;
     }
-  } finally {
-    imageQueueRunning = false;
 
-    // In case a priority retry was queued as the loop was finishing.
-    if (imageLookupQueue.length) processImageQueue();
+    activeImageLookups += 1;
+
+    fetchAutoImageForRow(row)
+      .then(result => {
+        if (result.status === "error") {
+          const attempts = imageRetryCount.get(key) || 0;
+          if (attempts < CONFIG.imageLookupMaxRetries) {
+            imageRetryCount.set(key, attempts + 1);
+            setTimeout(() => enqueueAutoImage(row, false), 900);
+          } else {
+            imageRetryCount.delete(key);
+          }
+        }
+      })
+      .finally(() => {
+        activeImageLookups -= 1;
+        processImageQueue();
+      });
   }
 }
 
@@ -601,7 +588,7 @@ function setupAutoImageLoading() {
 
       imageObserver.unobserve(entry.target);
     });
-  }, { rootMargin: "350px 0px" });
+  }, { rootMargin: "650px 0px" });
 
   document.querySelectorAll(".auto-image[data-index]").forEach(node => {
     imageObserver.observe(node);
