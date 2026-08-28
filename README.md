@@ -43,3 +43,13 @@ https://www.sportscardinvestor.com/cards/de-von-achane-football/2023-phoenix-bas
   - Row 37 inherits Troy Aikman
   - Row 74 inherits Josh Allen
 - The inherited names are also used for image matching and search.
+
+
+## v7 changes
+
+- Added automatic image lookup for cards.
+- The site now attempts to fetch card images from Sports Card Investor using the card's player, year, brand, type, and number.
+- Image lookup is lazy-loaded, so only cards near the viewport attempt a fetch.
+- Successful image matches are cached in the browser's local storage, so repeat visits should load faster.
+- Manual overrides in `card-images.json` still take priority.
+- Added a new Netlify function: `netlify/functions/card-image.mjs`.

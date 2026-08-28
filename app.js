@@ -1,7 +1,9 @@
 const CONFIG = {
   siteTitle: "Football Card Archive",
   dataEndpoint: "/.netlify/functions/cards",
-  imageManifest: "/card-images.json"
+  imageManifest: "/card-images.json",
+  autoImageEndpoint: "/.netlify/functions/card-image",
+  imageCacheStorageKey: "football-card-archive-image-cache-v1"
 };
 
 const ALIASES = {
@@ -45,6 +47,9 @@ const FUZZY = {
 let rows = [];
 let mapping = {};
 let imageManifest = {};
+let autoImageCache = {};
+let imageObserver = null;
+const pendingImageKeys = new Set();
 
 const $ = (id) => document.getElementById(id);
 const norm = (s) => String(s ?? "")
@@ -107,7 +112,6 @@ function inheritPlayerNames(sourceRows) {
   return sourceRows.map(originalRow => {
     const row = { ...originalRow };
 
-    // If the sheet ever has a single full-name column, support the same behavior.
     if (playerHeader) {
       const currentPlayer = String(row[playerHeader] ?? "").trim();
       if (currentPlayer) {
@@ -201,6 +205,38 @@ function cardKey(row) {
   ].map(v => norm(v)).join("|");
 }
 
+function loadStoredImageCache() {
+  try {
+    const raw = localStorage.getItem(CONFIG.imageCacheStorageKey);
+    autoImageCache = raw ? JSON.parse(raw) : {};
+  } catch {
+    autoImageCache = {};
+  }
+}
+
+function saveStoredImageCache() {
+  try {
+    localStorage.setItem(CONFIG.imageCacheStorageKey, JSON.stringify(autoImageCache));
+  } catch {
+    // ignore storage errors
+  }
+}
+
+function getCachedAutoImage(key) {
+  const item = autoImageCache[key];
+  if (item && typeof item.imageUrl === "string" && item.imageUrl) return item.imageUrl;
+  return "";
+}
+
+function setCachedAutoImage(key, payload) {
+  autoImageCache[key] = {
+    imageUrl: payload.imageUrl || "",
+    sourcePage: payload.sourcePage || "",
+    cachedAt: new Date().toISOString()
+  };
+  saveStoredImageCache();
+}
+
 function imageUrlFor(row) {
   const sheetUrl = field(row, "image");
   if (sheetUrl && /^https?:\/\//i.test(sheetUrl)) return sheetUrl;
@@ -209,23 +245,38 @@ function imageUrlFor(row) {
   if (typeof manifest === "string" && /^https?:\/\//i.test(manifest)) return manifest;
   if (manifest && /^https?:\/\//i.test(manifest.url || "")) return manifest.url;
 
+  const cached = getCachedAutoImage(cardKey(row));
+  if (cached) return cached;
+
   return "";
 }
 
-function imageHtml(row, detail=false) {
+function imageTagHtml(url, alt, detail = false) {
+  const klass = detail ? "detail-image-tag" : "card-image";
+  return `<img class="${klass}"
+      src="${escapeHtml(url)}"
+      alt="${alt}"
+      loading="lazy"
+      referrerpolicy="no-referrer">`;
+}
+
+function placeholderHtml(row, realIndex) {
+  return `<div class="card-placeholder auto-image"
+      data-index="${realIndex}"
+      data-key="${escapeHtml(cardKey(row))}">
+      <strong>${escapeHtml(initials(titleFor(row)))}</strong>
+    </div>`;
+}
+
+function imageHtml(row, realIndex, detail=false) {
   const src = imageUrlFor(row);
   const alt = escapeHtml(cardQuery(row) || titleFor(row));
 
   if (src) {
-    return `<img class="${detail ? "" : "card-image"}"
-      src="${escapeHtml(src)}"
-      alt="${alt}"
-      loading="lazy"
-      referrerpolicy="no-referrer"
-      onerror="this.parentElement.innerHTML='<div class=&quot;card-placeholder&quot;><strong>${escapeHtml(initials(titleFor(row)))}</strong></div>'">`;
+    return imageTagHtml(src, alt, detail);
   }
 
-  return `<div class="card-placeholder"><strong>${escapeHtml(initials(titleFor(row)))}</strong></div>`;
+  return placeholderHtml(row, realIndex);
 }
 
 function initials(name) {
@@ -283,7 +334,7 @@ function render() {
     return `
       <article class="card">
         <div class="card-image-wrap">
-          ${imageHtml(row)}
+          ${imageHtml(row, realIndex, false)}
           ${isRookie(row) ? '<span class="grade-badge">RC</span>' : ""}
         </div>
         <div class="card-body">
@@ -306,6 +357,8 @@ function render() {
   document.querySelectorAll(".details-button").forEach(btn => {
     btn.addEventListener("click", () => openDetails(Number(btn.dataset.index)));
   });
+
+  setupAutoImageLoading();
 }
 
 function setOptions(id, values, label) {
@@ -342,9 +395,72 @@ function updateStats() {
   }
 }
 
+function updatePlaceholdersForKey(key, imageUrl) {
+  if (!imageUrl) return;
+  const alt = escapeHtml(key);
+  document.querySelectorAll(`.auto-image[data-key="${CSS.escape(key)}"]`).forEach(node => {
+    node.outerHTML = imageTagHtml(imageUrl, alt, false);
+  });
+}
+
+async function fetchAutoImageForRow(row) {
+  const key = cardKey(row);
+  if (!key) return;
+  if (imageUrlFor(row)) {
+    updatePlaceholdersForKey(key, imageUrlFor(row));
+    return;
+  }
+  if (pendingImageKeys.has(key)) return;
+
+  pendingImageKeys.add(key);
+
+  try {
+    const params = new URLSearchParams({
+      player: fullName(row),
+      year: field(row, "year"),
+      brand: brandFor(row),
+      type: cardTypeFor(row),
+      number: field(row, "cardNumber"),
+      rookie: isRookie(row) ? "Y" : "N"
+    });
+
+    const response = await fetch(`${CONFIG.autoImageEndpoint}?${params.toString()}`);
+    const payload = await response.json();
+
+    if (response.ok && payload.imageUrl) {
+      setCachedAutoImage(key, payload);
+      updatePlaceholdersForKey(key, payload.imageUrl);
+    }
+  } catch (error) {
+    console.warn("Auto image lookup failed:", key, error);
+  } finally {
+    pendingImageKeys.delete(key);
+  }
+}
+
+function setupAutoImageLoading() {
+  if (imageObserver) imageObserver.disconnect();
+
+  imageObserver = new IntersectionObserver((entries) => {
+    entries.forEach(entry => {
+      if (!entry.isIntersecting) return;
+      const index = Number(entry.target.dataset.index);
+      const row = rows[index];
+      if (row) fetchAutoImageForRow(row);
+      imageObserver.unobserve(entry.target);
+    });
+  }, { rootMargin: "250px 0px" });
+
+  document.querySelectorAll(".auto-image[data-index]").forEach(node => {
+    imageObserver.observe(node);
+  });
+}
+
 function openDetails(index) {
   const row = rows[index];
   if (!row) return;
+
+  fetchAutoImageForRow(row);
 
   const fields = Object.entries(row).filter(([,v]) => String(v ?? "").trim() !== "");
   const q = encodeURIComponent(cardQuery(row));
@@ -353,7 +469,7 @@ function openDetails(index) {
 
   $("dialog-content").innerHTML = `
     <div class="detail-grid">
-      <div class="detail-image">${imageHtml(row, true)}</div>
+      <div class="detail-image">${imageHtml(row, index, true)}</div>
       <div class="detail-body">
         ${metaLine(row) ? `<div class="eyebrow">${escapeHtml(metaLine(row))}</div>` : ""}
         <h2>${escapeHtml(titleFor(row))}</h2>
@@ -383,6 +499,8 @@ async function loadCards() {
   $("error-state").classList.add("hidden");
 
   try {
+    loadStoredImageCache();
+
     const [response, manifestResponse] = await Promise.all([
       fetch(`${CONFIG.dataEndpoint}?ts=${Date.now()}`, { cache: "no-store" }),
       fetch(`${CONFIG.imageManifest}?ts=${Date.now()}`, { cache: "no-store" }).catch(() => null)
@@ -401,7 +519,6 @@ async function loadCards() {
     const headers = payload.headers || Object.keys(sourceRows[0] || {});
     mapping = mapHeaders(headers);
 
-    // v6: fill down player names from the most recent nonblank cells above.
     rows = inheritPlayerNames(sourceRows);
 
     updateStats();
