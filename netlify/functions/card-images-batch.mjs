@@ -32,6 +32,11 @@ function domainScore(domain) {
   return 0;
 }
 
+function isTrustedCardDomain(domain) {
+  const d = String(domain || "").toLowerCase();
+  return SOURCE_PRIORITIES.some(([needle]) => d.includes(needle));
+}
+
 function normalizedBrandTokens(brand) {
   const raw = normalize(brand);
   const tokens = words(raw);
@@ -152,30 +157,42 @@ function buildQueries(card) {
   const number = safeQueryText(card.number);
   const notes = safeQueryText(card.notes);
 
-  // The first query is intentionally plain natural language so it works on
-  // Serper's free account. No quotes, site:, OR, #, or other operators.
+  const core = [player, year, brand, number].filter(Boolean).join(" ");
+
+  // 1) Exact catalog description.
   const primary = [
-    player,
-    year,
-    brand,
+    core,
     type,
-    number,
     String(card.rookie).toUpperCase() === "Y" ? "rookie" : "",
     "football card"
   ].filter(Boolean).join(" ");
 
-  // The fallback stays operator-free but can use a useful note such as
-  // "Silver", "Refractor", or another parallel name.
-  const fallback = [
-    player,
-    year,
-    brand,
-    number,
+  // 2) Less restrictive. Useful when a site calls "Base" nothing at all,
+  // or when the sheet's Type wording differs from the database.
+  const broad = [
+    core,
     notes,
     "football card"
   ].filter(Boolean).join(" ");
 
-  return [...new Set([primary, fallback].filter(Boolean))];
+  // 3/4) Plain source-name searches. These are free-tier-safe because they
+  // use no site: operator, but strongly surface canonical database images.
+  const sportsCardsPro = [
+    core,
+    notes,
+    "SportsCardsPro"
+  ].filter(Boolean).join(" ");
+
+  const sportsCardInvestor = [
+    core,
+    type,
+    notes,
+    "Sports Card Investor"
+  ].filter(Boolean).join(" ");
+
+  return [...new Set(
+    [primary, broad, sportsCardsPro, sportsCardInvestor].filter(Boolean)
+  )];
 }
 
 function pickBest(images, card) {
@@ -185,9 +202,14 @@ function pickBest(images, card) {
     .sort((a, b) => b._score - a._score);
 
   const best = ranked[0];
+  if (!best) return null;
 
-  // A low-confidence result is worse than leaving the image blank.
-  if (!best || best._score < 52) return null;
+  // Trusted card databases can sometimes omit "Base", "RC", etc. from the
+  // image title even when player/year/set/number are correct. Give those
+  // canonical sources a slightly lower acceptance threshold.
+  const threshold = isTrustedCardDomain(best.domain) ? 44 : 52;
+
+  if (best._score < threshold) return null;
   return best;
 }
 
@@ -202,7 +224,7 @@ async function serperSearch(apiKey, query) {
       q: query,
       gl: "us",
       hl: "en",
-      num: 20
+      num: 10
     })
   });
 

@@ -3,9 +3,10 @@ const CONFIG = {
   dataEndpoint: "/.netlify/functions/cards",
   imageManifest: "/card-images.json",
   imageBatchEndpoint: "/.netlify/functions/card-images-batch",
-  imageCacheStorageKey: "football-card-archive-image-cache-v4",
+  imageCacheStorageKey: "football-card-archive-image-cache-v5",
   imageBatchSize: 8,
-  imageBatchConcurrency: 2
+  imageBatchConcurrency: 2,
+  initialImageLookahead: 48
 };
 
 const ALIASES = {
@@ -638,7 +639,7 @@ async function runImageBatch(batch) {
         updatePlaceholdersForKey(key, result);
         imagesFoundThisSession += 1;
       } else {
-        setCachedAutoImageMiss(key, 12);
+        setCachedAutoImageMiss(key, 6);
         imagesMissedThisSession += 1;
       }
     }
@@ -654,7 +655,7 @@ async function runImageBatch(batch) {
       imageProviderBlocked = false;
       setImageProviderStatus(
         "connected",
-        `Image search connected · ${imagesFoundThisSession} found this visit · ${imagesMissedThisSession} unmatched`
+        `Image search connected · ${imagesFoundThisSession} found · ${imagesMissedThisSession} unmatched · ${imageLookupQueue.length} queued`
       );
     }
   } catch (error) {
@@ -708,6 +709,13 @@ function processImageQueue() {
 function setupAutoImageLoading() {
   if (imageObserver) imageObserver.disconnect();
 
+  // v13: put the top of the spreadsheet into the queue FIRST. This makes
+  // image discovery deterministic instead of letting restored scroll position
+  // or IntersectionObserver timing jump lower rows ahead of the catalog start.
+  rows
+    .slice(0, CONFIG.initialImageLookahead)
+    .forEach(row => enqueueAutoImage(row));
+
   imageObserver = new IntersectionObserver((entries) => {
     entries.forEach(entry => {
       if (!entry.isIntersecting) return;
@@ -723,10 +731,6 @@ function setupAutoImageLoading() {
   document.querySelectorAll(".auto-image[data-index]").forEach(node => {
     imageObserver.observe(node);
   });
-
-  // Do not rely solely on IntersectionObserver. Seed the first visible rows
-  // immediately so a browser/observer quirk cannot prevent the image pipeline.
-  rows.slice(0, 16).forEach(row => enqueueAutoImage(row));
 }
 function openDetails(index) {
   const row = rows[index];

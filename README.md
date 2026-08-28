@@ -176,3 +176,23 @@ v12 fixes that:
 
 No Netlify environment-variable changes are needed if `SERPER_API_KEY` is
 already present and visible to Functions. Upload v12 and redeploy.
+
+
+## v13 — ordered loading + stronger missed-card fallback
+
+- Resets the browser image cache so cards marked unmatched by v12 get retried.
+- Queues the first 48 catalog rows before IntersectionObserver can prioritize
+  cards lower on the page.
+- Keeps visible-card loading afterward, so scrolling still discovers images.
+- Fixes the Serper result count to 10.
+- Adds source-focused, free-tier-safe fallback searches:
+  - `<card identity> SportsCardsPro`
+  - `<card identity> Sports Card Investor`
+- Trusted card-database results get a slightly more forgiving confidence
+  threshold when player/year/set/card-number identity is otherwise strong.
+- Temporary misses are retried after 6 hours instead of 12.
+- The image status now reports how many cards remain queued.
+
+This should improve cards such as Israel Abanikanda 2023 Prizm #379 and
+Davante Adams 2014 Topps Chrome #114, which have canonical database pages but
+were skipped by the generic v12 image query.
