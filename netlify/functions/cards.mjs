@@ -46,7 +46,11 @@ function parseCSV(text) {
 
 export default async () => {
   try {
-    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&gid=${SHEET_GID}`;
+    // Use the normal Google Sheets CSV export instead of the Visualization
+    // (gviz) endpoint. gviz infers column types and can blank alphanumeric
+    // values in a mostly-numeric column. Column G contains mixed card IDs
+    // such as 130, MBC-47, RC-12, etc., so we must preserve displayed text.
+    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/export?format=csv&gid=${SHEET_GID}`;
     const response = await fetch(url, {
       headers: { "User-Agent": "Mozilla/5.0" }
     });

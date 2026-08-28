@@ -527,7 +527,6 @@ function render() {
       <article class="card">
         <div class="card-image-wrap">
           ${imageHtml(row, realIndex, false)}
-          ${customImageIndex[cardKey(row)] ? '<span class="custom-image-badge">My photo</span>' : ""}
           ${isRookie(row) ? '<span class="grade-badge">RC</span>' : ""}
         </div>
         <div class="card-body">

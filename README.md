@@ -250,3 +250,17 @@ current tab/session after you enter it.
 `@netlify/blobs` is included in package.json. Netlify installs it during the
 site build. Netlify Blobs provides site-wide persistent storage that survives
 deployments.
+
+
+## v15 — card ID preservation + custom-photo cleanup
+
+- Removed the `My Photo` badge from custom images.
+- Switched the Google Sheet reader from the `gviz` CSV endpoint to Google's
+  standard CSV export endpoint.
+- This is important for Column G because it contains mixed values: purely
+  numeric IDs as well as alphanumeric IDs such as `MBC-47`, `RC-12`, etc.
+- Google's Visualization endpoint can infer a mostly-numeric column as numeric
+  and return text entries as blank. Standard CSV export preserves the displayed
+  card ID text.
+- Column G continues to be treated as a string everywhere in the site, so
+  letters, hyphens, leading text, and other characters are part of the card ID.
