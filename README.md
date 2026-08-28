@@ -510,3 +510,66 @@ has changed over the last year.
 - Market value fallback now explicitly uses the ungraded/raw historical series,
   regardless of which grade-history tab is selected.
 - Grade-history tabs from v21 are otherwise unchanged.
+
+
+## v23 — market trend change + catalog market values
+
+### One-year percentage change
+
+The selected Price History grade now displays its one-year percentage change:
+
+- green upward arrow for gains;
+- red downward arrow for losses;
+- neutral arrow for essentially flat movement.
+
+The percentage is calculated from the first and last SportsCardsPro trend
+points inside the most recent one-year window.
+
+The Values by Grade cards also display the one-year percentage when historical
+trend data exists for that grade.
+
+### Market values on catalog cards
+
+Each catalog tile now has compact rows for:
+
+- Raw / Ungraded
+- Grade 9
+- PSA 10
+
+SportsCardsPro's `search_cards` response supplies these exact three summary
+prices, so PSA 10 is shown rather than an ambiguous generic "Grade 10."
+
+### API-credit-conscious loading
+
+Current grid prices are populated in the background using `search_cards`,
+grouped by player + year. One search can therefore populate multiple cards.
+
+To respect Parse's free-tier request limit:
+
+- at most one new player/year search is made every 20 seconds;
+- search results are cached in Netlify Blobs for 24 hours;
+- resolved card summaries are stored persistently and shared across devices;
+- the queue pauses while a card detail modal is open, leaving rate-limit room
+  for the more important detail request.
+
+Percentage changes require full historical trend data, which comes from the
+more expensive `get_card` call. v23 deliberately does NOT call `get_card` for
+all 6,324 cards in the background.
+
+Instead:
+- current Raw / Grade 9 / PSA 10 values can populate through the cheaper
+  background search;
+- once a card's detail market dashboard has been loaded, its one-year changes
+  are saved into the shared grid summary and appear on that card tile too.
+
+This avoids consuming thousands of Parse credits solely to calculate arrows.
+
+### No new environment variables
+
+Keep:
+
+- `SERPER_API_KEY`
+- `CARD_CATALOG_ADMIN_PASSWORD`
+- `PARSE_API_KEY`
+
+No additional API setup is required for v23.

@@ -6,11 +6,13 @@ const CONFIG = {
   customImageEndpoint: "/.netlify/functions/custom-card-image",
   marketEndpoint: "/.netlify/functions/card-market",
   marketSalesEndpoint: "/.netlify/functions/card-market-sales",
+  marketGridEndpoint: "/.netlify/functions/card-market-grid",
   imageCacheStorageKey: "football-card-archive-image-cache-v5",
   imageBatchSize: 8,
   imageBatchConcurrency: 2,
   initialImageLookahead: 48,
-  defaultPageSize: 250
+  defaultPageSize: 250,
+  marketGridRefreshMs: 20000
 };
 
 const ALIASES = {
@@ -71,6 +73,10 @@ let activeDetailIndex = null;
 let customEditorOpen = false;
 const marketDataCache = new Map();
 const marketGradeByCard = new Map();
+let marketGridSummaries = {};
+let marketGridTimer = null;
+let marketGridRequestToken = 0;
+let marketGridRemainingGroups = 0;
 
 const $ = (id) => document.getElementById(id);
 const norm = (s) => String(s ?? "")
@@ -506,6 +512,125 @@ function renderPagination(totalPages, totalEntries) {
   });
 }
 
+function compactMarketValue(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: n < 10 ? 2 : 0,
+    maximumFractionDigits: n < 100 ? 2 : 0
+  }).format(n);
+}
+
+function gridMarketHtml(summary) {
+  const data = summary || {};
+  const changes = data.changes || {};
+
+  const row = (label, value, change) => `
+    <div class="card-market-row">
+      <span class="card-market-grade">${label}</span>
+      <strong class="card-market-price">${compactMarketValue(value)}</strong>
+      ${marketChangeHtml(change, true)}
+    </div>`;
+
+  return `
+    <div class="card-market-heading">Market value</div>
+    <div class="card-market-values">
+      ${row("Raw", data.ungraded, changes.ungraded)}
+      ${row("G9", data.grade9, changes.grade9)}
+      ${row("PSA 10", data.psa10, changes.psa10)}
+    </div>`;
+}
+
+function applyGridMarketSummaries() {
+  document.querySelectorAll("[data-grid-market-key]").forEach(node => {
+    const key = node.dataset.gridMarketKey || "";
+    node.innerHTML = gridMarketHtml(marketGridSummaries[key]);
+  });
+}
+
+function gridMarketCardPayload(row) {
+  return {
+    key: cardKey(row),
+    player: fullName(row),
+    year: field(row, "year"),
+    brand: brandFor(row),
+    type: cardTypeFor(row),
+    number: field(row, "cardNumber"),
+    rookie: isRookie(row) ? "Y" : "N",
+    notes: field(row, "notes")
+  };
+}
+
+function currentMarketGridSignature() {
+  return currentPageRows.map(row => cardKey(row)).join("||");
+}
+
+function scheduleGridMarketLookup(delay = 150) {
+  if (marketGridTimer) clearTimeout(marketGridTimer);
+
+  const signature = currentMarketGridSignature();
+  if (!signature) return;
+
+  marketGridTimer = setTimeout(() => {
+    loadGridMarketSummaries(signature);
+  }, delay);
+}
+
+async function loadGridMarketSummaries(signature) {
+  if (signature !== currentMarketGridSignature()) return;
+
+  // Leave Parse-rate-limit headroom while a detail modal is actively loading.
+  if ($("card-dialog")?.open) {
+    scheduleGridMarketLookup(7000);
+    return;
+  }
+
+  const token = ++marketGridRequestToken;
+
+  try {
+    const response = await fetch(CONFIG.marketGridEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        cards: currentPageRows.map(gridMarketCardPayload)
+      })
+    });
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (token !== marketGridRequestToken) return;
+
+    if (response.ok) {
+      marketGridSummaries = {
+        ...marketGridSummaries,
+        ...(payload.summaries || {})
+      };
+
+      marketGridRemainingGroups = Number(payload.remainingGroups || 0);
+      applyGridMarketSummaries();
+
+      if (marketGridRemainingGroups > 0 && signature === currentMarketGridSignature()) {
+        scheduleGridMarketLookup(CONFIG.marketGridRefreshMs);
+      }
+    } else {
+      console.warn("Grid market lookup failed:", payload.error || response.status);
+    }
+  } catch (error) {
+    console.warn("Grid market lookup failed:", error);
+  }
+}
+
+function cacheDetailSummaryOnGrid(row, data) {
+  const summary = detailMarketSummary(data);
+  if (!summary) return;
+
+  marketGridSummaries[cardKey(row)] = summary;
+  applyGridMarketSummaries();
+}
 function render() {
   const filtered = filteredRows();
   pageSize = Number($("page-size")?.value || CONFIG.defaultPageSize);
@@ -537,10 +662,10 @@ function render() {
           ${metaLine(row) ? `<div class="card-meta">${escapeHtml(metaLine(row))}</div>` : ""}
           <h3 class="card-name">${escapeHtml(titleFor(row))}</h3>
           ${sub ? `<div class="card-subtitle">${escapeHtml(sub)}</div>` : ""}
-          <div class="card-bottom">
-            <div>
-              <div class="value-label">Market value</div>
-              <div class="card-value">${money(field(row,"value"))}</div>
+          <div class="card-bottom card-bottom-market">
+            <div class="card-market-block"
+              data-grid-market-key="${escapeHtml(cardKey(row))}">
+              ${gridMarketHtml(marketGridSummaries[cardKey(row)])}
             </div>
             <button class="details-button" data-index="${realIndex}">Details →</button>
           </div>
@@ -556,6 +681,7 @@ function render() {
 
   renderPagination(totalPages, totalEntries);
   setupAutoImageLoading();
+  scheduleGridMarketLookup();
 }
 function setOptions(id, values, label) {
   const el = $(id);
@@ -1244,6 +1370,91 @@ function filterTrendToOneYear(points) {
   return sorted.filter(p => Date.parse(p.date) >= cutoff.getTime());
 }
 
+function trendPercentChange(points) {
+  const oneYear = filterTrendToOneYear(points)
+    .map(point => ({
+      ...point,
+      numericPrice: Number(
+        point.numericPrice !== undefined && point.numericPrice !== null
+          ? point.numericPrice
+          : String(point.price || "").replace(/[$,]/g, "")
+      )
+    }))
+    .filter(point => Number.isFinite(point.numericPrice))
+    .sort((a,b) => Date.parse(a.date) - Date.parse(b.date));
+
+  if (oneYear.length < 2) return null;
+
+  const first = oneYear[0].numericPrice;
+  const last = oneYear[oneYear.length - 1].numericPrice;
+
+  if (!Number.isFinite(first) || !Number.isFinite(last) || first === 0) return null;
+
+  return ((last - first) / first) * 100;
+}
+
+function marketChangeHtml(value, compact = false) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) {
+    return compact
+      ? '<span class="market-change market-change-empty">—</span>'
+      : "";
+  }
+
+  const rounded = Math.abs(n) < .05 ? 0 : n;
+  const direction = rounded > 0 ? "up" : rounded < 0 ? "down" : "flat";
+  const arrow = rounded > 0 ? "↑" : rounded < 0 ? "↓" : "→";
+  const sign = rounded > 0 ? "+" : "";
+
+  return `<span class="market-change ${direction} ${compact ? "compact" : ""}">
+    <span class="market-change-arrow">${arrow}</span>
+    ${sign}${rounded.toFixed(1)}%
+  </span>`;
+}
+
+function trendPointsForPriceKey(trends, key, label = "") {
+  if (!trends) return [];
+
+  if (key === "ungraded" || label === "Ungraded") {
+    return trends.ungraded || trends.used || trends.raw || [];
+  }
+
+  return trends[key] || [];
+}
+
+function detailMarketSummary(data) {
+  if (!data?.found) return null;
+
+  const prices = data.prices || [];
+  const trends = data.trends || {};
+
+  const byKey = new Map(prices.map(item => [item.key, item]));
+  const byLabel = new Map(prices.map(item => [item.label, item]));
+
+  const raw = byKey.get("ungraded") || byLabel.get("Ungraded");
+  const grade9 = byKey.get("grade_9") || byLabel.get("Grade 9");
+  const psa10 = byKey.get("psa_10") || byLabel.get("PSA 10");
+
+  return {
+    ungraded: raw?.value ?? null,
+    grade9: grade9?.value ?? null,
+    psa10: psa10?.value ?? null,
+    changes: {
+      ungraded: trendPercentChange(
+        trendPointsForPriceKey(trends, raw?.key || "ungraded", "Ungraded")
+      ),
+      grade9: trendPercentChange(
+        trendPointsForPriceKey(trends, grade9?.key || "grade_9", "Grade 9")
+      ),
+      psa10: trendPercentChange(
+        trendPointsForPriceKey(trends, psa10?.key || "psa_10", "PSA 10")
+      )
+    },
+    source: "detail",
+    updatedAt: Date.now()
+  };
+}
+
 function trendGradeLabel(key) {
   const labels = {
     ungraded: "Ungraded",
@@ -1391,6 +1602,7 @@ function renderMarketData(data, cardKeyValue) {
     : (data.trend || []);
 
   const chartPoints = filterTrendToOneYear(selectedTrend);
+  const selectedTrendChange = trendPercentChange(selectedTrend);
   const selectedGradeLabel = selectedGradeKey
     ? trendGradeLabel(selectedGradeKey)
     : "Ungraded";
@@ -1444,7 +1656,10 @@ function renderMarketData(data, cardKeyValue) {
         <div class="market-section-heading chart-heading-with-controls">
           <div>
             <div class="section-kicker">PRICE HISTORY</div>
-            <h3>${escapeHtml(selectedGradeLabel)} · 1 year</h3>
+            <div class="market-trend-title-row">
+              <h3>${escapeHtml(selectedGradeLabel)} · 1 year</h3>
+              ${marketChangeHtml(selectedTrendChange)}
+            </div>
             ${historyDepth
               ? `<span class="history-depth">${escapeHtml(historyDepth)} available for this grade</span>`
               : ""}
@@ -1475,11 +1690,18 @@ function renderMarketData(data, cardKeyValue) {
 
         ${gradeCards.length ? `
           <div class="grade-price-grid">
-            ${gradeCards.map(item => `
-              <div class="grade-price-card">
-                <span>${escapeHtml(item.label)}</span>
-                <strong>${marketMoney(item.value)}</strong>
-              </div>`).join("")}
+            ${gradeCards.map(item => {
+              const gradeChange = trendPercentChange(
+                trendPointsForPriceKey(trendSeries, item.key, item.label)
+              );
+
+              return `
+                <div class="grade-price-card">
+                  <span>${escapeHtml(item.label)}</span>
+                  <strong>${marketMoney(item.value)}</strong>
+                  ${marketChangeHtml(gradeChange, true)}
+                </div>`;
+            }).join("")}
           </div>` : `
           <div class="market-empty-copy">No grade-specific prices are currently available for this card.</div>
         `}
@@ -1554,6 +1776,7 @@ async function loadMarketData(index) {
 
   if (marketDataCache.has(key)) {
     const cached = marketDataCache.get(key);
+    cacheDetailSummaryOnGrid(row, cached);
     target.innerHTML = renderMarketData(cached, key);
     attachMarketGradeEvents(cached, key);
     return;
@@ -1580,6 +1803,7 @@ async function loadMarketData(index) {
     }
 
     marketDataCache.set(key, data);
+    cacheDetailSummaryOnGrid(row, data);
 
     if (activeDetailIndex === index && $("market-content")) {
       $("market-content").innerHTML = renderMarketData(data, key);
@@ -1767,9 +1991,15 @@ $("clear-filters").addEventListener("click", () => {
 });
 
 $("refresh-btn").addEventListener("click", loadCards);
-$("dialog-close").addEventListener("click", () => $("card-dialog").close());
+$("dialog-close").addEventListener("click", () => {
+  $("card-dialog").close();
+  if (marketGridRemainingGroups > 0) scheduleGridMarketLookup(500);
+});
 $("card-dialog").addEventListener("click", (e) => {
-  if (e.target === $("card-dialog")) $("card-dialog").close();
+  if (e.target === $("card-dialog")) {
+    $("card-dialog").close();
+    if (marketGridRemainingGroups > 0) scheduleGridMarketLookup(500);
+  }
 });
 
 document.addEventListener("paste", event => {

@@ -4,6 +4,8 @@ const SCRAPER_ID = "5e67e7a5-866b-4073-8d41-881feb8b574b";
 const BASE_URL = `https://api.parse.bot/scraper/${SCRAPER_ID}`;
 const SERPER_SEARCH = "https://google.serper.dev/search";
 const CACHE_STORE = "football-card-market-cache";
+const SUMMARY_STORE = "football-card-market-summary";
+const SUMMARY_INDEX_KEY = "__index__";
 const MARKET_CACHE_MS = 12 * 60 * 60 * 1000;
 const MATCH_CACHE_MS = 180 * 24 * 60 * 60 * 1000;
 const SCHEMA_VERSION = 19;
@@ -402,6 +404,85 @@ function extractSales(root) {
 }
 
 
+function clientNorm(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase()
+    .replace(/[’']/g, "")
+    .replace(/[()]/g, "")
+    .replace(/\s+/g, " ");
+}
+
+function clientCardKey(card) {
+  return [
+    card.year,
+    card.brand,
+    card.player,
+    card.number,
+    card.type,
+    String(card.rookie).toUpperCase() === "Y" ? "rookie" : ""
+  ].map(clientNorm).join("|");
+}
+
+function oneYearChange(points) {
+  const sorted = (points || [])
+    .map(point => ({
+      date: point.date,
+      price: numberValue(point.numericPrice ?? point.price ?? point.value)
+    }))
+    .filter(point => point.date && point.price !== null && Number.isFinite(Date.parse(point.date)))
+    .sort((a,b) => Date.parse(a.date) - Date.parse(b.date));
+
+  if (sorted.length < 2) return null;
+
+  const newest = Date.parse(sorted[sorted.length - 1].date);
+  const cutoff = new Date(newest);
+  cutoff.setFullYear(cutoff.getFullYear() - 1);
+
+  const year = sorted.filter(point => Date.parse(point.date) >= cutoff.getTime());
+  if (year.length < 2 || year[0].price === 0) return null;
+
+  return ((year[year.length - 1].price - year[0].price) / year[0].price) * 100;
+}
+
+function priceByKey(prices, key, label) {
+  return (prices || []).find(item => item.key === key)?.value ??
+    (prices || []).find(item => item.label === label)?.value ??
+    null;
+}
+
+function detailSummary(prices, trends) {
+  const rawTrend = trends.ungraded || trends.used || trends.raw || [];
+
+  return {
+    ungraded: priceByKey(prices, "ungraded", "Ungraded"),
+    grade9: priceByKey(prices, "grade_9", "Grade 9"),
+    psa10: priceByKey(prices, "psa_10", "PSA 10"),
+    changes: {
+      ungraded: oneYearChange(rawTrend),
+      grade9: oneYearChange(trends.grade_9 || []),
+      psa10: oneYearChange(trends.psa_10 || [])
+    },
+    source: "detail",
+    updatedAt: Date.now()
+  };
+}
+
+async function persistMarketSummary(card, prices, trends) {
+  try {
+    const summaryStore = getStore({
+      name: SUMMARY_STORE,
+      consistency: "strong"
+    });
+
+    const index = await summaryStore.get(SUMMARY_INDEX_KEY, { type: "json" }) || {};
+    index[clientCardKey(card)] = detailSummary(prices, trends);
+    await summaryStore.setJSON(SUMMARY_INDEX_KEY, index);
+  } catch (error) {
+    console.warn("Could not persist market summary:", error.message);
+  }
+}
+
 function sportsCardsProUrl(cardId) {
   return `https://www.sportscardspro.com/game/${cardId}`;
 }
@@ -536,6 +617,8 @@ export default async (request) => {
       sales:embeddedSales,
       fetchedAt:new Date().toISOString()
     };
+
+    await persistMarketSummary(card, prices, trends.all);
 
     await s.setJSON(cacheKey,{
       schemaVersion:SCHEMA_VERSION,
