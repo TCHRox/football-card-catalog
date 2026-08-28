@@ -83,6 +83,14 @@
         <option value="year-asc">Oldest first</option>
         <option value="value-desc">Highest value</option>
       </select>
+
+      <select id="page-size" aria-label="Cards per page">
+        <option value="50">50 per page</option>
+        <option value="100">100 per page</option>
+        <option value="250" selected>250 per page</option>
+        <option value="500">500 per page</option>
+        <option value="1000">1,000 per page</option>
+      </select>
     </section>
 
     <div class="results-bar">
@@ -90,7 +98,11 @@
       <button id="clear-filters" class="text-button" type="button">Clear filters</button>
     </div>
 
+    <nav id="pagination-top" class="pagination" aria-label="Catalog pages"></nav>
+
     <section id="catalog" class="catalog" aria-live="polite"></section>
+
+    <nav id="pagination-bottom" class="pagination pagination-bottom" aria-label="Catalog pages"></nav>
 
     <section id="empty-state" class="empty-state hidden">
       <div class="empty-icon">◫</div>

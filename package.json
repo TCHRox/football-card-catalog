@@ -1,0 +1,8 @@
+{
+  "name": "football-card-catalog",
+  "private": true,
+  "version": "14.0.0",
+  "dependencies": {
+    "@netlify/blobs": "11.0.1"
+  }
+}

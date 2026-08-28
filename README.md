@@ -196,3 +196,57 @@ already present and visible to Functions. Upload v12 and redeploy.
 This should improve cards such as Israel Abanikanda 2023 Prizm #379 and
 Davante Adams 2014 Topps Chrome #114, which have canonical database pages but
 were skipped by the generic v12 image query.
+
+
+## v14 — permanent custom images + pagination
+
+### Pagination
+- Catalog now defaults to 250 entries per page.
+- Page-size menu: 50, 100, 250, 500, or 1,000.
+- Page-number controls appear above and below the grid.
+- Search/filter/sort changes return to page 1.
+- Automated image searches are focused on the current page rather than all 6,324 rows.
+
+### Permanent custom images
+v14 uses Netlify Blobs for persistent user-uploaded images.
+
+A custom image:
+- overrides the automatically found image;
+- persists through future site deploys;
+- appears on other computers and phones;
+- can be replaced later;
+- can be removed to return to the automatic image.
+
+The card detail window now has **Use my image / Replace my image**.
+
+Supported ways to add an image:
+- Choose Image
+- drag and drop
+- copy an image and press Ctrl+V while the custom-image editor is open
+
+The browser automatically resizes/compresses the image before upload.
+
+### Required one-time Netlify setup
+
+Add one environment variable to the existing Netlify site:
+
+`CARD_CATALOG_ADMIN_PASSWORD`
+
+Set the value to a password only you know.
+
+Recommended:
+1. Netlify -> Site configuration -> Environment variables.
+2. Add `CARD_CATALOG_ADMIN_PASSWORD`.
+3. Choose a strong password as the value.
+4. If Netlify shows scopes, make sure Functions can access it.
+5. Save.
+6. Trigger a new deploy.
+
+The password is never committed to GitHub. The browser keeps it only for the
+current tab/session after you enter it.
+
+### New dependency
+
+`@netlify/blobs` is included in package.json. Netlify installs it during the
+site build. Netlify Blobs provides site-wide persistent storage that survives
+deployments.

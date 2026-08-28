@@ -3,10 +3,12 @@ const CONFIG = {
   dataEndpoint: "/.netlify/functions/cards",
   imageManifest: "/card-images.json",
   imageBatchEndpoint: "/.netlify/functions/card-images-batch",
+  customImageEndpoint: "/.netlify/functions/custom-card-image",
   imageCacheStorageKey: "football-card-archive-image-cache-v5",
   imageBatchSize: 8,
   imageBatchConcurrency: 2,
-  initialImageLookahead: 48
+  initialImageLookahead: 48,
+  defaultPageSize: 250
 };
 
 const ALIASES = {
@@ -59,6 +61,12 @@ let imageProviderReady = false;
 let imageProviderBlocked = false;
 let imagesFoundThisSession = 0;
 let imagesMissedThisSession = 0;
+let customImageIndex = {};
+let currentPage = 1;
+let pageSize = 250;
+let currentPageRows = [];
+let activeDetailIndex = null;
+let customEditorOpen = false;
 
 const $ = (id) => document.getElementById(id);
 const norm = (s) => String(s ?? "")
@@ -292,7 +300,29 @@ function setCachedAutoImageMiss(key, hours = 12) {
   saveStoredImageCache();
 }
 
+function customImageDataFor(row) {
+  const key = cardKey(row);
+  const meta = customImageIndex[key];
+  if (!meta) return null;
+
+  const params = new URLSearchParams({
+    key,
+    v: String(meta.version || meta.updatedAt || "")
+  });
+
+  return {
+    imageUrl: `${CONFIG.customImageEndpoint}?${params.toString()}`,
+    fallbackImageUrl: "",
+    source: "My photo",
+    isCustom: true
+  };
+}
+
 function imageDataFor(row) {
+  // A user-uploaded custom image always wins.
+  const custom = customImageDataFor(row);
+  if (custom) return custom;
+
   const sheetUrl = field(row, "image");
   if (sheetUrl && /^https?:\/\//i.test(sheetUrl)) {
     return { imageUrl: sheetUrl, fallbackImageUrl: "" };
@@ -390,7 +420,7 @@ function searchable(row) {
   return Object.values(row).join(" ").toLowerCase();
 }
 
-function render() {
+function filteredRows() {
   let filtered = [...rows];
   const q = norm($("search").value);
   const year = $("year-filter").value;
@@ -413,18 +443,91 @@ function render() {
       break;
   }
 
-  const totalCards = filtered.reduce((sum,r)=>sum+quantity(r),0);
-  $("results-count").textContent =
-    `${totalCards.toLocaleString()} card${totalCards===1?"":"s"} · ` +
-    `${filtered.length.toLocaleString()} catalog entr${filtered.length===1?"y":"ies"}`;
+  return filtered;
+}
 
-  $("catalog").innerHTML = filtered.map((row) => {
+function paginationItems(totalPages, page) {
+  if (totalPages <= 9) {
+    return Array.from({length: totalPages}, (_, i) => i + 1);
+  }
+
+  const pages = new Set([1, totalPages]);
+  for (let p = page - 2; p <= page + 2; p++) {
+    if (p > 1 && p < totalPages) pages.add(p);
+  }
+
+  const sorted = [...pages].sort((a,b) => a - b);
+  const items = [];
+
+  sorted.forEach((p, i) => {
+    if (i > 0 && p - sorted[i - 1] > 1) items.push("…");
+    items.push(p);
+  });
+
+  return items;
+}
+
+function renderPagination(totalPages, totalEntries) {
+  const build = () => {
+    if (totalPages <= 1) return "";
+
+    const items = paginationItems(totalPages, currentPage);
+
+    return `
+      <button class="page-button" data-page="${currentPage - 1}" ${currentPage <= 1 ? "disabled" : ""}>‹</button>
+      ${items.map(item => item === "…"
+        ? '<span class="page-ellipsis">…</span>'
+        : `<button class="page-button ${item === currentPage ? "active" : ""}" data-page="${item}">${item}</button>`
+      ).join("")}
+      <button class="page-button" data-page="${currentPage + 1}" ${currentPage >= totalPages ? "disabled" : ""}>›</button>
+      <span class="page-summary">Page ${currentPage.toLocaleString()} of ${totalPages.toLocaleString()}</span>
+    `;
+  };
+
+  ["pagination-top", "pagination-bottom"].forEach(id => {
+    const nav = $(id);
+    nav.innerHTML = build();
+
+    nav.querySelectorAll(".page-button[data-page]").forEach(button => {
+      button.addEventListener("click", () => {
+        if (button.disabled) return;
+        currentPage = Number(button.dataset.page);
+        render();
+        document.querySelector(".controls")?.scrollIntoView({
+          behavior: "smooth",
+          block: "start"
+        });
+      });
+    });
+  });
+}
+
+function render() {
+  const filtered = filteredRows();
+  pageSize = Number($("page-size")?.value || CONFIG.defaultPageSize);
+
+  const totalEntries = filtered.length;
+  const totalPages = Math.max(1, Math.ceil(totalEntries / pageSize));
+  currentPage = Math.min(Math.max(1, currentPage), totalPages);
+
+  const startIndex = (currentPage - 1) * pageSize;
+  const endIndex = Math.min(startIndex + pageSize, totalEntries);
+  currentPageRows = filtered.slice(startIndex, endIndex);
+
+  const totalCards = filtered.reduce((sum,r)=>sum+quantity(r),0);
+
+  $("results-count").textContent = totalEntries
+    ? `${totalCards.toLocaleString()} cards · showing ${(startIndex + 1).toLocaleString()}–${endIndex.toLocaleString()} of ${totalEntries.toLocaleString()} catalog entries`
+    : "0 cards";
+
+  $("catalog").innerHTML = currentPageRows.map((row) => {
     const realIndex = rows.indexOf(row);
     const sub = subtitle(row);
     return `
       <article class="card">
         <div class="card-image-wrap">
           ${imageHtml(row, realIndex, false)}
+          ${customImageIndex[cardKey(row)] ? '<span class="custom-image-badge">My photo</span>' : ""}
           ${isRookie(row) ? '<span class="grade-badge">RC</span>' : ""}
         </div>
         <div class="card-body">
@@ -442,15 +545,15 @@ function render() {
       </article>`;
   }).join("");
 
-  $("empty-state").classList.toggle("hidden", filtered.length > 0);
+  $("empty-state").classList.toggle("hidden", totalEntries > 0);
 
   document.querySelectorAll(".details-button").forEach(btn => {
     btn.addEventListener("click", () => openDetails(Number(btn.dataset.index)));
   });
 
+  renderPagination(totalPages, totalEntries);
   setupAutoImageLoading();
 }
-
 function setOptions(id, values, label) {
   const el = $(id);
   const current = el.value;
@@ -712,7 +815,7 @@ function setupAutoImageLoading() {
   // v13: put the top of the spreadsheet into the queue FIRST. This makes
   // image discovery deterministic instead of letting restored scroll position
   // or IntersectionObserver timing jump lower rows ahead of the catalog start.
-  rows
+  currentPageRows
     .slice(0, CONFIG.initialImageLookahead)
     .forEach(row => enqueueAutoImage(row));
 
@@ -732,16 +835,247 @@ function setupAutoImageLoading() {
     imageObserver.observe(node);
   });
 }
-function openDetails(index) {
+async function loadCustomImageIndex() {
+  try {
+    const response = await fetch(`${CONFIG.customImageEndpoint}?index=1&ts=${Date.now()}`, {
+      cache: "no-store"
+    });
+    if (!response.ok) return {};
+    const payload = await response.json();
+    return payload.index || {};
+  } catch {
+    return {};
+  }
+}
+
+function adminPassword() {
+  return sessionStorage.getItem("football-card-admin-password") || "";
+}
+
+function requestAdminPassword() {
+  const existing = adminPassword();
+  if (existing) return existing;
+
+  const value = window.prompt("Enter the catalog admin password:");
+  if (!value) return "";
+
+  sessionStorage.setItem("football-card-admin-password", value);
+  return value;
+}
+
+async function imageElementFromFile(file) {
+  if ("createImageBitmap" in window) {
+    return createImageBitmap(file);
+  }
+
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      resolve(img);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("Could not read that image."));
+    };
+    img.src = url;
+  });
+}
+
+async function canvasBlob(canvas, quality) {
+  return new Promise(resolve => {
+    canvas.toBlob(resolve, "image/jpeg", quality);
+  });
+}
+
+async function prepareCustomImage(file) {
+  if (!file || !String(file.type || "").startsWith("image/")) {
+    throw new Error("Please choose or paste an image.");
+  }
+
+  const source = await imageElementFromFile(file);
+  const sourceWidth = source.width;
+  const sourceHeight = source.height;
+
+  const maxDimension = 1800;
+  const scale = Math.min(1, maxDimension / Math.max(sourceWidth, sourceHeight));
+  const width = Math.max(1, Math.round(sourceWidth * scale));
+  const height = Math.max(1, Math.round(sourceHeight * scale));
+
+  const canvas = document.createElement("canvas");
+  canvas.width = width;
+  canvas.height = height;
+
+  const ctx = canvas.getContext("2d");
+  ctx.drawImage(source, 0, 0, width, height);
+
+  if (source.close) source.close();
+
+  let blob = await canvasBlob(canvas, .88);
+
+  if (blob && blob.size > 3_500_000) {
+    blob = await canvasBlob(canvas, .72);
+  }
+
+  if (!blob) throw new Error("Could not prepare the image for upload.");
+  if (blob.size > 4_500_000) {
+    throw new Error("The image is still too large after resizing.");
+  }
+
+  return new File([blob], "card-photo.jpg", { type: "image/jpeg" });
+}
+
+function setUploadStatus(message, state = "") {
+  const el = $("custom-upload-status");
+  if (!el) return;
+
+  el.textContent = message;
+  el.className = `upload-status ${state}`.trim();
+}
+
+async function uploadCustomImage(index, originalFile) {
   const row = rows[index];
   if (!row) return;
 
+  const password = requestAdminPassword();
+  if (!password) return;
+
+  try {
+    setUploadStatus("Preparing image…");
+    const file = await prepareCustomImage(originalFile);
+
+    setUploadStatus("Saving permanently…");
+
+    const form = new FormData();
+    form.append("file", file);
+    form.append("key", cardKey(row));
+    form.append("password", password);
+
+    const response = await fetch(CONFIG.customImageEndpoint, {
+      method: "POST",
+      body: form
+    });
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (response.status === 401) {
+      sessionStorage.removeItem("football-card-admin-password");
+      throw new Error("Incorrect admin password.");
+    }
+
+    if (!response.ok) {
+      throw new Error(payload.error || `Upload failed (${response.status}).`);
+    }
+
+    customImageIndex[cardKey(row)] = payload.meta;
+    setUploadStatus("Saved. This photo will now appear on every device.", "success");
+
+    render();
+    renderDetailContent(index);
+  } catch (error) {
+    setUploadStatus(error.message, "error");
+  }
+}
+
+async function removeCustomImage(index) {
+  const row = rows[index];
+  if (!row) return;
+
+  const password = requestAdminPassword();
+  if (!password) return;
+
+  if (!window.confirm("Remove your custom image and go back to the automatically found image?")) {
+    return;
+  }
+
+  const response = await fetch(CONFIG.customImageEndpoint, {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      key: cardKey(row),
+      password
+    })
+  });
+
+  const payload = await response.json().catch(() => ({}));
+
+  if (response.status === 401) {
+    sessionStorage.removeItem("football-card-admin-password");
+    window.alert("Incorrect admin password.");
+    return;
+  }
+
+  if (!response.ok) {
+    window.alert(payload.error || "Could not remove the image.");
+    return;
+  }
+
+  delete customImageIndex[cardKey(row)];
+  render();
+  renderDetailContent(index);
+}
+
+function openCustomImageEditor(index) {
+  customEditorOpen = true;
+  const panel = $("custom-image-panel");
+  if (!panel) return;
+
+  panel.classList.remove("hidden");
+  $("custom-file-input")?.focus();
+}
+
+function attachCustomEditorEvents(index) {
+  $("replace-image-btn")?.addEventListener("click", () => openCustomImageEditor(index));
+  $("remove-custom-image-btn")?.addEventListener("click", () => removeCustomImage(index));
+
+  const input = $("custom-file-input");
+  const choose = $("choose-custom-image");
+  const dropzone = $("custom-image-dropzone");
+
+  choose?.addEventListener("click", () => input?.click());
+
+  input?.addEventListener("change", () => {
+    const file = input.files?.[0];
+    if (file) uploadCustomImage(index, file);
+  });
+
+  if (dropzone) {
+    ["dragenter", "dragover"].forEach(type => {
+      dropzone.addEventListener(type, event => {
+        event.preventDefault();
+        dropzone.classList.add("dragover");
+      });
+    });
+
+    ["dragleave", "drop"].forEach(type => {
+      dropzone.addEventListener(type, event => {
+        event.preventDefault();
+        dropzone.classList.remove("dragover");
+      });
+    });
+
+    dropzone.addEventListener("drop", event => {
+      const file = [...(event.dataTransfer?.files || [])]
+        .find(item => String(item.type || "").startsWith("image/"));
+
+      if (file) uploadCustomImage(index, file);
+    });
+  }
+}
+
+function renderDetailContent(index) {
+  const row = rows[index];
+  if (!row) return;
+
+  activeDetailIndex = index;
   enqueueAutoImage(row, true);
 
   const fields = Object.entries(row).filter(([,v]) => String(v ?? "").trim() !== "");
   const q = encodeURIComponent(cardQuery(row));
   const googleImages = `https://www.google.com/search?tbm=isch&q=${q}`;
   const ebaySold = `https://www.ebay.com/sch/i.html?_nkw=${q}&LH_Sold=1&LH_Complete=1`;
+  const hasCustom = Boolean(customImageIndex[cardKey(row)]);
 
   $("dialog-content").innerHTML = `
     <div class="detail-grid">
@@ -760,12 +1094,44 @@ function openDetails(index) {
         </div>
 
         <div class="detail-actions">
-          <a class="primary" href="${ebaySold}" target="_blank" rel="noopener">Recent eBay sales</a>
+          <button class="primary" id="replace-image-btn" type="button">${hasCustom ? "Replace my image" : "Use my image"}</button>
+          ${hasCustom ? '<button class="danger" id="remove-custom-image-btn" type="button">Remove my image</button>' : ""}
+          <a href="${ebaySold}" target="_blank" rel="noopener">Recent eBay sales</a>
           <a href="${googleImages}" target="_blank" rel="noopener">Image search</a>
         </div>
+
+        <section id="custom-image-panel" class="custom-image-panel ${customEditorOpen ? "" : "hidden"}">
+          <h3>Permanent custom image</h3>
+          <p>Paste an image with <strong>Ctrl+V</strong>, drag one here, or choose a file. It will be resized before upload and saved permanently for this card.</p>
+
+          <div id="custom-image-dropzone" class="upload-dropzone">
+            <div>
+              <strong>Paste, drop, or choose an image</strong>
+              <span>On a phone, use Choose Image to select a photo from your library.</span>
+            </div>
+          </div>
+
+          <input id="custom-file-input" type="file" accept="image/*" class="sr-only">
+
+          <div class="upload-buttons">
+            <button id="choose-custom-image" class="button secondary" type="button">Choose Image</button>
+          </div>
+
+          <div id="custom-upload-status" class="upload-status"></div>
+        </section>
       </div>
     </div>`;
-  $("card-dialog").showModal();
+
+  attachCustomEditorEvents(index);
+}
+
+function openDetails(index) {
+  customEditorOpen = false;
+  renderDetailContent(index);
+
+  if (!$("card-dialog").open) {
+    $("card-dialog").showModal();
+  }
 }
 
 async function loadCards() {
@@ -778,9 +1144,10 @@ async function loadCards() {
     loadStoredImageCache();
     checkImageProvider();
 
-    const [response, manifestResponse] = await Promise.all([
+    const [response, manifestResponse, customIndex] = await Promise.all([
       fetch(`${CONFIG.dataEndpoint}?ts=${Date.now()}`, { cache: "no-store" }),
-      fetch(`${CONFIG.imageManifest}?ts=${Date.now()}`, { cache: "no-store" }).catch(() => null)
+      fetch(`${CONFIG.imageManifest}?ts=${Date.now()}`, { cache: "no-store" }).catch(() => null),
+      loadCustomImageIndex()
     ]);
 
     const payload = await response.json();
@@ -789,6 +1156,8 @@ async function loadCards() {
     imageManifest = (manifestResponse && manifestResponse.ok)
       ? await manifestResponse.json()
       : {};
+
+    customImageIndex = customIndex || {};
 
     const sourceRows = payload.rows || [];
     if (!sourceRows.length) throw new Error("The sheet connected, but no card rows were found.");
@@ -832,14 +1201,29 @@ async function loadCards() {
 $("site-title").textContent = CONFIG.siteTitle;
 document.title = CONFIG.siteTitle;
 
-$("search").addEventListener("input", render);
-$("year-filter").addEventListener("change", render);
-$("sort").addEventListener("change", render);
+$("search").addEventListener("input", () => {
+  currentPage = 1;
+  render();
+});
+$("year-filter").addEventListener("change", () => {
+  currentPage = 1;
+  render();
+});
+$("sort").addEventListener("change", () => {
+  currentPage = 1;
+  render();
+});
+$("page-size").addEventListener("change", () => {
+  currentPage = 1;
+  render();
+});
 
 $("clear-filters").addEventListener("click", () => {
   $("search").value = "";
   $("year-filter").value = "";
   $("sort").value = "sheet";
+  $("page-size").value = String(CONFIG.defaultPageSize);
+  currentPage = 1;
   render();
 });
 
@@ -847,6 +1231,19 @@ $("refresh-btn").addEventListener("click", loadCards);
 $("dialog-close").addEventListener("click", () => $("card-dialog").close());
 $("card-dialog").addEventListener("click", (e) => {
   if (e.target === $("card-dialog")) $("card-dialog").close();
+});
+
+document.addEventListener("paste", event => {
+  if (!$("card-dialog")?.open || !customEditorOpen || activeDetailIndex === null) return;
+
+  const file = [...(event.clipboardData?.items || [])]
+    .find(item => String(item.type || "").startsWith("image/"))
+    ?.getAsFile();
+
+  if (!file) return;
+
+  event.preventDefault();
+  uploadCustomImage(activeDetailIndex, file);
 });
 
 loadCards();
