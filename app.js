@@ -1592,16 +1592,45 @@ function chartSvg(points) {
   const midDate = new Date((minX+maxX)/2).toLocaleDateString(undefined, {month:"short", year:"2-digit"});
   const lastDate = new Date(maxX).toLocaleDateString(undefined, {month:"short", year:"numeric"});
 
-  const dots = clean.map(s => `
-    <circle cx="${x(s.timestamp).toFixed(1)}" cy="${y(s.numericPrice).toFixed(1)}" r="3.5" class="chart-dot">
-      <title>${escapeHtml(`${s.date}: ${marketMoney(s.numericPrice)}`)}</title>
-    </circle>`).join("");
+  const latest = clean[clean.length - 1];
+  const latestX = x(latest.timestamp);
+  const latestY = y(latest.numericPrice);
+  const latestLabel = marketMoney(latest.numericPrice);
+  const latestLabelWidth = Math.max(68, latestLabel.length * 8 + 18);
+  const latestLabelHeight = 24;
+  const latestLabelX = Math.min(
+    W - R - latestLabelWidth,
+    Math.max(L + 4, latestX - latestLabelWidth - 14)
+  );
+  const latestLabelY = Math.max(T + 4, latestY - 32);
+
+  const dots = clean.map((s, i) => {
+    const cx = x(s.timestamp).toFixed(1);
+    const cy = y(s.numericPrice).toFixed(1);
+    if (i === clean.length - 1) {
+      return `
+        <circle cx="${cx}" cy="${cy}" r="10" class="chart-latest-halo"></circle>
+        <circle cx="${cx}" cy="${cy}" r="5.6" class="chart-latest-dot">
+          <title>${escapeHtml(`${s.date}: ${marketMoney(s.numericPrice)}`)}</title>
+        </circle>`;
+    }
+    return `
+      <circle cx="${cx}" cy="${cy}" r="3.5" class="chart-dot">
+        <title>${escapeHtml(`${s.date}: ${marketMoney(s.numericPrice)}`)}</title>
+      </circle>`;
+  }).join("");
+
+  const latestBadge = `
+      <line x1="${(latestLabelX + latestLabelWidth).toFixed(1)}" y1="${(latestLabelY + latestLabelHeight/2).toFixed(1)}" x2="${(latestX - 8).toFixed(1)}" y2="${latestY.toFixed(1)}" class="chart-latest-connector"/>
+      <rect x="${latestLabelX.toFixed(1)}" y="${latestLabelY.toFixed(1)}" width="${latestLabelWidth.toFixed(1)}" height="${latestLabelHeight}" rx="12" class="chart-latest-badge"/>
+      <text x="${(latestLabelX + latestLabelWidth/2).toFixed(1)}" y="${(latestLabelY + 16).toFixed(1)}" text-anchor="middle" class="chart-latest-label">${escapeHtml(latestLabel)}</text>`;
 
   return `
     <svg class="sales-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Historical card price chart">
       ${yTicks}
       <path d="${path}" class="chart-line"/>
       ${dots}
+      ${latestBadge}
       <text x="${L}" y="${H-10}" class="chart-axis-label">${escapeHtml(firstDate)}</text>
       <text x="${W/2}" y="${H-10}" class="chart-axis-label" text-anchor="middle">${escapeHtml(midDate)}</text>
       <text x="${W-R}" y="${H-10}" class="chart-axis-label" text-anchor="end">${escapeHtml(lastDate)}</text>

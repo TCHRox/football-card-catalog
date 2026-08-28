@@ -1332,3 +1332,35 @@ select,
   stroke-linecap: round;
   stroke-linejoin: round;
 }
+
+
+/* v29 tweaks */
+.grade-badge {
+  background: rgba(23,27,32,.9);
+  border: 1px solid rgba(255,255,255,.16);
+  color: #ffffff;
+  box-shadow: none;
+}
+.chart-latest-halo {
+  fill: rgba(255,140,26,.16);
+}
+.chart-latest-dot {
+  fill: #20262e;
+  stroke: var(--accent);
+  stroke-width: 3;
+}
+.chart-latest-badge {
+  fill: rgba(255,140,26,.14);
+  stroke: rgba(255,140,26,.58);
+  stroke-width: 1.25;
+}
+.chart-latest-label {
+  fill: #ffffff;
+  font-size: 12px;
+  font-weight: 800;
+  font-family: Inter, sans-serif;
+}
+.chart-latest-connector {
+  stroke: rgba(255,140,26,.55);
+  stroke-width: 1.5;
+}
