@@ -53,3 +53,21 @@ https://www.sportscardinvestor.com/cards/de-von-achane-football/2023-phoenix-bas
 - Successful image matches are cached in the browser's local storage, so repeat visits should load faster.
 - Manual overrides in `card-images.json` still take priority.
 - Added a new Netlify function: `netlify/functions/card-image.mjs`.
+
+
+## v8 changes
+
+- The site now uses the known spreadsheet column positions as the source of truth:
+  - A first name
+  - B last name
+  - C year
+  - D rookie Y/N
+  - E brand
+  - F type
+  - G card number
+  - H quantity
+  - O notes
+- This fixes card-number lookup and prevents quantity from being mistaken for a card number.
+- Sports Card Investor URL generation now preserves apostrophes as word separators, so `De'Von` becomes `de-von`.
+- Added alternate player slug and brand variants for better lookup coverage.
+- Added more normal browser request headers to the image lookup function.

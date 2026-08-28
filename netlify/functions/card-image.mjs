@@ -1,12 +1,20 @@
 const DEFAULT_HEADERS = {
-  "User-Agent": "Mozilla/5.0 (compatible; FootballCardArchiveBot/1.0)"
+  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
+  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8",
+  "Accept-Language": "en-US,en;q=0.9"
 };
 
-function slugify(value) {
-  return String(value ?? "")
+function slugify(value, apostropheMode = "separator") {
+  let text = String(value ?? "")
     .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/[’']/g, "")
+    .replace(/[\u0300-\u036f]/g, "");
+
+  // Sports Card Investor commonly turns names like De'Von into de-von.
+  text = apostropheMode === "separator"
+    ? text.replace(/[’']/g, "-")
+    : text.replace(/[’']/g, "");
+
+  return text
     .replace(/\./g, "")
     .replace(/&/g, " and ")
     .replace(/[^a-zA-Z0-9]+/g, "-")
@@ -28,18 +36,36 @@ function typeVariants(type) {
 }
 
 function buildCandidateUrls({ player, year, brand, type, number }) {
-  const playerSlug = slugify(`${player}-football`);
-  const brandSlug = slugify(brand);
+  const playerSlugs = [
+    slugify(`${player}-football`, "separator"),
+    slugify(`${player}-football`, "remove")
+  ].filter(Boolean);
+
+  const brandSlugs = [
+    slugify(brand),
+    slugify(String(brand || "").replace(/^panini\s+/i, "")),
+    slugify(String(brand || "").replace(/^topps\s+/i, "topps "))
+  ].filter(Boolean);
+
   const num = String(number || "").trim();
   const urls = new Set();
 
-  for (const variant of typeVariants(type)) {
-    const typeSlug = slugify(variant);
-    if (playerSlug && year && brandSlug && typeSlug && num) {
-      urls.add(`https://www.sportscardinvestor.com/cards/${playerSlug}/${year}-${brandSlug}-${typeSlug}-${num}`);
-    }
-    if (playerSlug && year && brandSlug && num) {
-      urls.add(`https://www.sportscardinvestor.com/cards/${playerSlug}/${year}-${brandSlug}-${num}`);
+  const typeList = typeVariants(type);
+  if (!typeList.includes("base")) typeList.push("base");
+
+  for (const playerSlug of [...new Set(playerSlugs)]) {
+    for (const brandSlug of [...new Set(brandSlugs)]) {
+      for (const variant of typeList) {
+        const typeSlug = slugify(variant);
+
+        if (playerSlug && year && brandSlug && typeSlug && num) {
+          urls.add(`https://www.sportscardinvestor.com/cards/${playerSlug}/${year}-${brandSlug}-${typeSlug}-${num}`);
+        }
+
+        if (playerSlug && year && brandSlug && num) {
+          urls.add(`https://www.sportscardinvestor.com/cards/${playerSlug}/${year}-${brandSlug}-${num}`);
+        }
+      }
     }
   }
 

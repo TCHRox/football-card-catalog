@@ -82,6 +82,23 @@ function mapHeaders(headers) {
   return result;
 }
 
+// v8: the collection sheet has a known fixed layout.
+// Use column position as the source of truth instead of guessing from headers.
+function applyKnownColumnLayout(headers, detected) {
+  return {
+    ...detected,
+    firstName: headers[0] || detected.firstName || "",   // A
+    lastName: headers[1] || detected.lastName || "",     // B
+    year: headers[2] || detected.year || "",             // C
+    rookie: headers[3] || detected.rookie || "",         // D
+    set: headers[4] || detected.set || "",                // E = Brand
+    cardType: headers[5] || detected.cardType || "",      // F = Type
+    cardNumber: headers[6] || detected.cardNumber || "",  // G = Number
+    quantity: headers[7] || detected.quantity || "",      // H = Owned
+    notes: headers[14] || detected.notes || ""            // O = Notes
+  };
+}
+
 function field(row, key) {
   const header = mapping[key];
   return header ? String(row[header] ?? "").trim() : "";
@@ -517,7 +534,7 @@ async function loadCards() {
     if (!sourceRows.length) throw new Error("The sheet connected, but no card rows were found.");
 
     const headers = payload.headers || Object.keys(sourceRows[0] || {});
-    mapping = mapHeaders(headers);
+    mapping = applyKnownColumnLayout(headers, mapHeaders(headers));
 
     rows = inheritPlayerNames(sourceRows);
 
