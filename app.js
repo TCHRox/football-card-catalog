@@ -7,42 +7,38 @@ const CONFIG = {
 const ALIASES = {
   player: [
     "player", "player name", "player names", "player(s)", "players",
-    "athlete", "athlete name", "subject", "subject name"
+    "athlete", "athlete name", "subject", "subject name", "full name"
   ],
+  firstName: ["first name", "firstname", "first"],
+  lastName: ["last name", "lastname", "last", "surname"],
   year: ["year", "card year", "season", "yr"],
+  rookie: ["rookie", "rookie card", "rc", "is rookie"],
   set: ["set", "set name", "product", "product name", "brand", "card set"],
+  cardType: ["type", "card type", "subset", "sub set", "insert", "base/subset"],
   cardNumber: [
     "card #", "card no", "card no.", "card number", "card num",
     "card num.", "number", "no.", "#"
   ],
-  parallel: ["parallel", "variation", "variant", "insert", "parallel/variation"],
-  team: ["team", "nfl team", "team name"],
-  grade: ["grade", "card grade", "numeric grade"],
-  grader: ["grader", "grading company", "grading service", "grading co"],
-  quantity: ["qty", "quantity", "count", "copies"],
+  quantity: ["qty", "quantity", "count", "copies", "owned"],
   purchasePrice: ["purchase price", "cost", "price paid", "paid", "purchase cost"],
   value: ["market value", "value", "current value", "estimated value", "est value"],
-  lastSale: ["last sale", "last sold", "recent sale"],
-  avg30: ["30-day avg", "30 day avg", "30-day average", "30 day average"],
   image: ["image url", "image", "photo url", "photo", "picture", "card image"],
-  serial: ["serial", "serial #", "serial number", "numbered", "serial numbered"],
   notes: ["notes", "note", "comments"]
 };
 
 const FUZZY = {
-  player: [/\bplayer\b/i, /\bathlete\b/i, /\bsubject\b/i],
+  player: [/\bplayer\b/i, /\bathlete\b/i, /\bsubject\b/i, /\bfull\b.*\bname\b/i],
+  firstName: [/^first/i, /\bfirst\b.*\bname\b/i],
+  lastName: [/^last/i, /\blast\b.*\bname\b/i, /\bsurname\b/i],
   year: [/\byear\b/i, /\bseason\b/i],
+  rookie: [/\brookie\b/i, /\brc\b/i],
   set: [/\bset\b/i, /\bproduct\b/i, /\bbrand\b/i],
-  cardNumber: [/card.*(number|num|no|#)/i],
-  parallel: [/\bparallel\b/i, /\bvariation\b/i, /\bvariant\b/i],
-  team: [/\bteam\b/i],
-  grade: [/\bgrade\b/i],
-  grader: [/\bgrader\b/i, /grading.*(company|service|co)/i],
-  quantity: [/\bqty\b/i, /\bquantity\b/i, /\bcopies\b/i],
+  cardType: [/\btype\b/i, /\bsubset\b/i, /\binsert\b/i, /^base$/i],
+  cardNumber: [/card.*(number|num|no|#)/i, /^\s*number\s*$/i],
+  quantity: [/\bqty\b/i, /\bquantity\b/i, /\bcopies\b/i, /\bowned\b/i],
   purchasePrice: [/purchase.*(price|cost)/i, /price.*paid/i],
   value: [/market.*value/i, /current.*value/i, /estimated.*value/i],
   image: [/\bimage\b/i, /\bphoto\b/i, /\bpicture\b/i],
-  serial: [/\bserial\b/i],
   notes: [/\bnotes?\b/i, /\bcomments?\b/i]
 };
 
@@ -67,14 +63,12 @@ function mapHeaders(headers) {
   const normalized = headers.map(h => ({ original: h, normalized: norm(h) }));
 
   for (const [key, aliases] of Object.entries(ALIASES)) {
-    // First: exact normalized aliases
     const exact = normalized.find(h => aliases.map(norm).includes(h.normalized));
     if (exact) {
       result[key] = exact.original;
       continue;
     }
 
-    // Second: semantic/fuzzy header matching
     const patterns = FUZZY[key] || [];
     const fuzzy = normalized.find(h => patterns.some(p => p.test(h.original)));
     result[key] = fuzzy ? fuzzy.original : "";
@@ -86,6 +80,25 @@ function mapHeaders(headers) {
 function field(row, key) {
   const header = mapping[key];
   return header ? String(row[header] ?? "").trim() : "";
+}
+
+function fullName(row) {
+  const explicit = field(row, "player");
+  if (explicit) return explicit;
+
+  const first = field(row, "firstName");
+  const last = field(row, "lastName");
+  const joined = [first, last].filter(Boolean).join(" ").trim();
+  return joined || "Unknown Player";
+}
+
+function yesNoIsTrue(value) {
+  const v = norm(value);
+  return ["y", "yes", "true", "1", "rc"].includes(v);
+}
+
+function isRookie(row) {
+  return yesNoIsTrue(field(row, "rookie"));
 }
 
 function moneyNumber(value) {
@@ -108,31 +121,36 @@ function quantity(row) {
 }
 
 function titleFor(row) {
-  // v4: never substitute the set/product as the player name.
-  return field(row, "player") || "Unknown Player";
+  return fullName(row);
+}
+
+function brandFor(row) {
+  return field(row, "set");
+}
+
+function cardTypeFor(row) {
+  return field(row, "cardType");
 }
 
 function cardQuery(row) {
   return [
     field(row, "year"),
-    field(row, "set"),
-    field(row, "player"),
-    field(row, "cardNumber") ? `#${field(row, "cardNumber")}` : "",
-    field(row, "parallel"),
-    field(row, "grade"),
-    field(row, "grader")
+    fullName(row),
+    brandFor(row),
+    cardTypeFor(row),
+    field(row, "cardNumber"),
+    isRookie(row) ? "Rookie" : ""
   ].filter(Boolean).join(" ");
 }
 
 function cardKey(row) {
   return [
     field(row, "year"),
-    field(row, "set"),
-    field(row, "player"),
+    brandFor(row),
+    fullName(row),
     field(row, "cardNumber"),
-    field(row, "parallel"),
-    field(row, "grade"),
-    field(row, "grader")
+    cardTypeFor(row),
+    isRookie(row) ? "rookie" : ""
   ].map(v => norm(v)).join("|");
 }
 
@@ -169,22 +187,15 @@ function initials(name) {
 }
 
 function metaLine(row) {
-  return [field(row, "year"), field(row, "set")].filter(Boolean).join(" · ");
+  return [field(row, "year"), brandFor(row)].filter(Boolean).join(" · ");
 }
 
 function subtitle(row) {
-  // v4: card number has NO # prefix, and no "Football Card" fallback.
   const bits = [];
+  if (isRookie(row)) bits.push("RC");
+  if (cardTypeFor(row)) bits.push(cardTypeFor(row));
   if (field(row, "cardNumber")) bits.push(field(row, "cardNumber"));
-  if (field(row, "parallel")) bits.push(field(row, "parallel"));
-  if (field(row, "team")) bits.push(field(row, "team"));
   return bits.join(" · ");
-}
-
-function gradeText(row) {
-  const g = field(row, "grade");
-  const company = field(row, "grader");
-  return [company, g].filter(Boolean).join(" ");
 }
 
 function searchable(row) {
@@ -195,13 +206,9 @@ function render() {
   let filtered = [...rows];
   const q = norm($("search").value);
   const year = $("year-filter").value;
-  const team = $("team-filter").value;
-  const grade = $("grade-filter").value;
 
   if (q) filtered = filtered.filter(r => searchable(r).includes(q));
   if (year) filtered = filtered.filter(r => field(r, "year") === year);
-  if (team) filtered = filtered.filter(r => field(r, "team") === team);
-  if (grade) filtered = filtered.filter(r => gradeText(r) === grade);
 
   switch ($("sort").value) {
     case "player-asc":
@@ -225,14 +232,12 @@ function render() {
 
   $("catalog").innerHTML = filtered.map((row) => {
     const realIndex = rows.indexOf(row);
-    const grade = gradeText(row);
     const sub = subtitle(row);
-
     return `
       <article class="card">
         <div class="card-image-wrap">
           ${imageHtml(row)}
-          ${grade ? `<span class="grade-badge">${escapeHtml(grade)}</span>` : ""}
+          ${isRookie(row) ? '<span class="grade-badge">RC</span>' : ""}
         </div>
         <div class="card-body">
           ${metaLine(row) ? `<div class="card-meta">${escapeHtml(metaLine(row))}</div>` : ""}
@@ -262,10 +267,8 @@ function setOptions(id, values, label) {
   const sorted = [...new Set(values.filter(Boolean))].sort((a,b) =>
     String(a).localeCompare(String(b), undefined, { numeric: true })
   );
-
   el.innerHTML = `<option value="">${label}</option>` +
     sorted.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join("");
-
   if (sorted.includes(current)) el.value = current;
 }
 
@@ -279,6 +282,17 @@ function updateStats() {
   $("stat-cards").textContent = cardCount.toLocaleString();
   $("stat-value").textContent = totalValue ? money(totalValue) : "—";
   $("stat-cost").textContent = totalCost ? money(totalCost) : "—";
+
+  const valueCard = document.getElementById("stat-value")?.closest(".stat-card");
+  const costCard = document.getElementById("stat-cost")?.closest(".stat-card");
+  if (valueCard) valueCard.style.display = mapping.value ? "" : "none";
+  if (costCard) costCard.style.display = mapping.purchasePrice ? "" : "none";
+
+  const stats = document.querySelector(".stats");
+  if (stats) {
+    const visibleCards = Array.from(stats.querySelectorAll(".stat-card")).filter(card => card.style.display !== "none").length;
+    stats.style.gridTemplateColumns = `repeat(${Math.max(1, visibleCards)}, 1fr)`;
+  }
 }
 
 function openDetails(index) {
@@ -312,7 +326,6 @@ function openDetails(index) {
         </div>
       </div>
     </div>`;
-
   $("card-dialog").showModal();
 }
 
@@ -325,18 +338,15 @@ async function loadCards() {
   try {
     const [response, manifestResponse] = await Promise.all([
       fetch(`${CONFIG.dataEndpoint}?ts=${Date.now()}`, { cache: "no-store" }),
-      fetch(`${CONFIG.imageManifest}?ts=${Date.now()}`, { cache: "no-store" })
-        .catch(() => null)
+      fetch(`${CONFIG.imageManifest}?ts=${Date.now()}`, { cache: "no-store" }).catch(() => null)
     ]);
 
     const payload = await response.json();
     if (!response.ok) throw new Error(payload.error || `Request failed (${response.status})`);
 
-    if (manifestResponse && manifestResponse.ok) {
-      imageManifest = await manifestResponse.json();
-    } else {
-      imageManifest = {};
-    }
+    imageManifest = (manifestResponse && manifestResponse.ok)
+      ? await manifestResponse.json()
+      : {};
 
     rows = payload.rows || [];
     if (!rows.length) throw new Error("The sheet connected, but no card rows were found.");
@@ -346,8 +356,10 @@ async function loadCards() {
 
     updateStats();
     setOptions("year-filter", rows.map(r=>field(r,"year")), "All years");
-    setOptions("team-filter", rows.map(r=>field(r,"team")), "All teams");
-    setOptions("grade-filter", rows.map(r=>gradeText(r)), "All grades");
+
+    document.getElementById("team-filter").style.display = "none";
+    document.getElementById("grade-filter").style.display = "none";
+
     render();
 
     $("sync-text").textContent = "Live";
@@ -356,7 +368,6 @@ async function loadCards() {
       `${rows.length.toLocaleString()} catalog entries loaded from your Google Sheet.`;
     $("last-updated").textContent = `Last refreshed ${new Date().toLocaleString()}`;
 
-    // Helpful diagnostic in browser DevTools.
     console.log("Detected Sheet columns:", mapping);
     console.log("Sheet headers:", headers);
   } catch (err) {
@@ -377,15 +388,13 @@ async function loadCards() {
 $("site-title").textContent = CONFIG.siteTitle;
 document.title = CONFIG.siteTitle;
 
-["search","year-filter","team-filter","grade-filter","sort"].forEach(id => {
-  $(id).addEventListener(id === "search" ? "input" : "change", render);
-});
+$("search").addEventListener("input", render);
+$("year-filter").addEventListener("change", render);
+$("sort").addEventListener("change", render);
 
 $("clear-filters").addEventListener("click", () => {
   $("search").value = "";
   $("year-filter").value = "";
-  $("team-filter").value = "";
-  $("grade-filter").value = "";
   $("sort").value = "sheet";
   render();
 });

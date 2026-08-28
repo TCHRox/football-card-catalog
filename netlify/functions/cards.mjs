@@ -1,9 +1,4 @@
-// Netlify Function: live Google Sheets -> JSON
-// Your Google Sheet ID is already entered below.
 const SHEET_ID = "1ZelpNWlXQHIzmDCVSDv1TMYEuh-eua6SKUtsESqlmeI";
-
-// 0 is usually the first tab. If your collection is on another tab,
-// open that tab in Google Sheets and copy the number after "#gid=" in the URL.
 const SHEET_GID = "1796597612";
 
 function parseCSV(text) {
@@ -14,7 +9,6 @@ function parseCSV(text) {
 
   for (let i = 0; i < text.length; i++) {
     const ch = text[i];
-
     if (quoted) {
       if (ch === '"') {
         if (text[i + 1] === '"') {
@@ -71,7 +65,6 @@ export default async () => {
     if (!matrix.length) throw new Error("No rows were returned from the selected Sheet tab.");
 
     let headers = matrix[0].map((h, i) => String(h).trim() || `Column ${i + 1}`);
-    // Ensure duplicate column names don't overwrite each other.
     const seen = {};
     headers = headers.map(h => {
       seen[h] = (seen[h] || 0) + 1;
