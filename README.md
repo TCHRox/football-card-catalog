@@ -734,3 +734,56 @@ Keep:
 - `CARD_CATALOG_ADMIN_PASSWORD`
 
 `THE_CARD_API_KEY` remains unused.
+
+
+## v26 — one canonical current market value
+
+v25 intentionally used two data sources for different jobs, but the detail
+modal did not communicate that clearly:
+
+- catalog tile current values = CardSight
+- detail modal current values = SportsCardsPro
+
+That caused visible discrepancies such as a Raw value of $3.97 on the tile
+and $2.54 in the modal for the same card.
+
+### v26 rule
+
+**CardSight is now the canonical current-value source everywhere.**
+
+The catalog tile and detail modal both read the same persistent Netlify
+CardSight summary for:
+
+- Raw
+- PSA 9
+- PSA 10
+- their stored one-year percentage changes
+
+Therefore those values now match exactly between card view and detail view.
+
+### SportsCardsPro's role
+
+SportsCardsPro via Parse is retained for:
+
+- historical one-year trend charts
+- grade-history chart tabs
+- completed-sale references
+
+Those sections are now explicitly labeled SportsCardsPro.
+
+SportsCardsPro's own current price-guide estimates are no longer displayed as
+the site's current market value because they can differ substantially from
+CardSight.
+
+The historical chart percentage is still the percentage movement of the
+SportsCardsPro series being graphed. It is source-specific and may differ from
+the CardSight percentage displayed in the Current Market Value cards.
+
+### Sorting
+
+No sorting changes are needed. Value sorting continues to use the same
+CardSight Raw value shown on both the catalog tile and modal.
+
+### No setup changes
+
+v26 requires no new API keys or Netlify environment variables.

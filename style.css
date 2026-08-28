@@ -1144,3 +1144,76 @@ footer {
   font-size: .7rem;
   line-height: 1.35;
 }
+
+
+/* v26 one canonical current-value source */
+.canonical-market-summary {
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  background: rgba(255,255,255,.026);
+  padding: 20px;
+}
+.canonical-market-heading {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+.canonical-market-heading h3 {
+  margin-top: 3px;
+}
+.canonical-source-link {
+  min-height: 42px;
+  padding: 10px 14px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255,255,255,.035);
+}
+.canonical-price-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.canonical-price-card {
+  min-height: 96px;
+}
+.canonical-price-card strong {
+  font-size: 2rem;
+}
+.market-reference-strip {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  border: 1px solid rgba(232,180,67,.18);
+  border-radius: 13px;
+  padding: 14px 16px;
+  background: rgba(232,180,67,.035);
+  color: var(--muted);
+  font-size: .75rem;
+  line-height: 1.45;
+}
+.market-reference-strip .section-kicker {
+  margin-bottom: 4px;
+}
+.market-reference-strip a {
+  color: var(--accent);
+  font-weight: 800;
+  text-decoration: none;
+  white-space: nowrap;
+}
+.market-source-note strong {
+  color: var(--text);
+}
+
+@media (max-width: 620px) {
+  .canonical-market-heading,
+  .market-reference-strip {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .canonical-price-grid {
+    grid-template-columns: 1fr;
+  }
+}
