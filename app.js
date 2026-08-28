@@ -2,10 +2,10 @@ const CONFIG = {
   siteTitle: "Football Card Archive",
   dataEndpoint: "/.netlify/functions/cards",
   imageManifest: "/card-images.json",
-  autoImageEndpoint: "/.netlify/functions/card-image",
-  imageCacheStorageKey: "football-card-archive-image-cache-v3",
-  imageLookupConcurrency: 10,
-  imageLookupMaxRetries: 1
+  imageBatchEndpoint: "/.netlify/functions/card-images-batch",
+  imageCacheStorageKey: "football-card-archive-image-cache-v4",
+  imageBatchSize: 8,
+  imageBatchConcurrency: 2
 };
 
 const ALIASES = {
@@ -51,11 +51,13 @@ let mapping = {};
 let imageManifest = {};
 let autoImageCache = {};
 let imageObserver = null;
-const pendingImageKeys = new Set();
 const queuedImageKeys = new Set();
 const imageLookupQueue = [];
-const imageRetryCount = new Map();
-let activeImageLookups = 0;
+let activeImageBatches = 0;
+let imageProviderReady = false;
+let imageProviderBlocked = false;
+let imagesFoundThisSession = 0;
+let imagesMissedThisSession = 0;
 
 const $ = (id) => document.getElementById(id);
 const norm = (s) => String(s ?? "")
@@ -251,6 +253,11 @@ function getCachedAutoImage(key) {
   return "";
 }
 
+function getCachedAutoImageData(key) {
+  const item = autoImageCache[key];
+  return item && item.imageUrl ? item : null;
+}
+
 function imageLookupRecentlyFailed(key) {
   const item = autoImageCache[key];
   if (!item || item.imageUrl) return false;
@@ -261,10 +268,12 @@ function imageLookupRecentlyFailed(key) {
 function setCachedAutoImage(key, payload) {
   autoImageCache[key] = {
     imageUrl: payload.imageUrl || "",
+    fallbackImageUrl: payload.fallbackImageUrl || "",
     originalImageUrl: payload.originalImageUrl || "",
     sourcePage: payload.sourcePage || "",
     source: payload.source || "",
     matchTitle: payload.matchTitle || "",
+    matchScore: payload.matchScore || 0,
     cachedAt: new Date().toISOString(),
     retryAfter: 0
   };
@@ -282,28 +291,63 @@ function setCachedAutoImageMiss(key, hours = 12) {
   saveStoredImageCache();
 }
 
-function imageUrlFor(row) {
+function imageDataFor(row) {
   const sheetUrl = field(row, "image");
-  if (sheetUrl && /^https?:\/\//i.test(sheetUrl)) return sheetUrl;
+  if (sheetUrl && /^https?:\/\//i.test(sheetUrl)) {
+    return { imageUrl: sheetUrl, fallbackImageUrl: "" };
+  }
 
   const manifest = imageManifest[cardKey(row)];
-  if (typeof manifest === "string" && /^https?:\/\//i.test(manifest)) return manifest;
-  if (manifest && /^https?:\/\//i.test(manifest.url || "")) return manifest.url;
+  if (typeof manifest === "string" && /^https?:\/\//i.test(manifest)) {
+    return { imageUrl: manifest, fallbackImageUrl: "" };
+  }
+  if (manifest && /^https?:\/\//i.test(manifest.url || "")) {
+    return { imageUrl: manifest.url, fallbackImageUrl: "" };
+  }
 
-  const cached = getCachedAutoImage(cardKey(row));
-  if (cached) return cached;
-
-  return "";
+  return getCachedAutoImageData(cardKey(row));
 }
 
-function imageTagHtml(url, alt, detail = false) {
+function imageUrlFor(row) {
+  return imageDataFor(row)?.imageUrl || "";
+}
+
+function imageTagHtml(imageData, alt, detail = false) {
+  const data = typeof imageData === "string"
+    ? { imageUrl: imageData, fallbackImageUrl: "" }
+    : imageData;
+
+  const url = data?.imageUrl || "";
+  const fallback = data?.fallbackImageUrl || "";
   const klass = detail ? "detail-image-tag" : "card-image";
+
+  if (!url) return "";
+
+  const fallbackAttr = fallback
+    ? ` data-fallback="${escapeHtml(fallback)}"`
+    : "";
+
   return `<img class="${klass}"
       src="${escapeHtml(url)}"
       alt="${alt}"
       loading="lazy"
-      referrerpolicy="no-referrer">`;
+      referrerpolicy="no-referrer"${fallbackAttr}
+      onerror="handleCardImageError(this)">`;
 }
+
+window.handleCardImageError = function(img) {
+  const fallback = img.dataset.fallback || "";
+  if (fallback && img.src !== fallback) {
+    img.dataset.fallback = "";
+    img.src = fallback;
+    return;
+  }
+
+  const parent = img.parentElement;
+  if (parent) {
+    parent.innerHTML = '<div class="card-placeholder"><strong>?</strong></div>';
+  }
+};
 
 function placeholderHtml(row, realIndex) {
   return `<div class="card-placeholder auto-image"
@@ -314,11 +358,11 @@ function placeholderHtml(row, realIndex) {
 }
 
 function imageHtml(row, realIndex, detail=false) {
-  const src = imageUrlFor(row);
+  const data = imageDataFor(row);
   const alt = escapeHtml(cardQuery(row) || titleFor(row));
 
-  if (src) {
-    return imageTagHtml(src, alt, detail);
+  if (data?.imageUrl) {
+    return imageTagHtml(data, alt, detail);
   }
 
   return placeholderHtml(row, realIndex);
@@ -440,47 +484,119 @@ function updateStats() {
   }
 }
 
-function updatePlaceholdersForKey(key, imageUrl) {
-  if (!imageUrl) return;
+function updatePlaceholdersForKey(key, imageData) {
+  const url = imageData?.imageUrl || "";
+  if (!url) return;
+
   const alt = escapeHtml(key);
   document.querySelectorAll(`.auto-image[data-key="${CSS.escape(key)}"]`).forEach(node => {
-    node.outerHTML = imageTagHtml(imageUrl, alt, false);
+    node.outerHTML = imageTagHtml(imageData, alt, false);
   });
 }
 
-async function fetchAutoImageForRow(row) {
+function setImageProviderStatus(state, detail = "") {
+  const pill = $("image-sync-pill");
+  const text = $("image-sync-text");
+  const line = $("image-status-line");
+
+  pill.classList.remove("online", "error", "searching");
+
+  if (state === "connected") {
+    pill.classList.add("online");
+    text.textContent = "Images connected";
+  } else if (state === "searching") {
+    pill.classList.add("searching");
+    text.textContent = "Finding images";
+  } else if (state === "error") {
+    pill.classList.add("error");
+    text.textContent = "Images offline";
+  } else {
+    text.textContent = "Images checking";
+  }
+
+  if (detail) line.textContent = detail;
+}
+
+async function checkImageProvider() {
+  try {
+    const response = await fetch(`${CONFIG.imageBatchEndpoint}?health=1`, {
+      cache: "no-store"
+    });
+    const payload = await response.json();
+
+    if (!response.ok || !payload.configured) {
+      imageProviderReady = false;
+      imageProviderBlocked = true;
+
+      const reason = payload.code === "SERPER_NOT_CONFIGURED"
+        ? "Image search is not connected: Netlify cannot see SERPER_API_KEY."
+        : `Image search is not connected: ${payload.error || `HTTP ${response.status}`}`;
+
+      setImageProviderStatus("error", reason);
+      return false;
+    }
+
+    imageProviderReady = true;
+    imageProviderBlocked = false;
+    setImageProviderStatus(
+      "connected",
+      "Image search connected. Images load in batches as cards come into view."
+    );
+    processImageQueue();
+    return true;
+  } catch (error) {
+    imageProviderReady = false;
+    imageProviderBlocked = true;
+    setImageProviderStatus(
+      "error",
+      `Image search connection failed: ${error.message}`
+    );
+    return false;
+  }
+}
+
+function cardPayload(row) {
+  return {
+    key: cardKey(row),
+    player: fullName(row),
+    year: field(row, "year"),
+    brand: brandFor(row),
+    type: cardTypeFor(row),
+    number: field(row, "cardNumber"),
+    rookie: isRookie(row) ? "Y" : "N",
+    notes: field(row, "notes")
+  };
+}
+
+function enqueueAutoImage(row, priority = false) {
   const key = cardKey(row);
-  if (!key) return { status: "skip" };
+  if (!key) return;
 
-  const existing = imageUrlFor(row);
-  if (existing) {
+  const existing = imageDataFor(row);
+  if (existing?.imageUrl) {
     updatePlaceholdersForKey(key, existing);
-    return { status: "found" };
+    return;
   }
 
-  if (imageLookupRecentlyFailed(key)) {
-    return { status: "recent-miss" };
-  }
+  if (imageLookupRecentlyFailed(key)) return;
+  if (queuedImageKeys.has(key)) return;
 
-  if (pendingImageKeys.has(key)) {
-    return { status: "pending" };
-  }
+  queuedImageKeys.add(key);
 
-  pendingImageKeys.add(key);
+  if (priority) imageLookupQueue.unshift(row);
+  else imageLookupQueue.push(row);
+
+  processImageQueue();
+}
+
+async function runImageBatch(batch) {
+  const cards = batch.map(cardPayload);
 
   try {
-    const params = new URLSearchParams({
-      player: fullName(row),
-      year: field(row, "year"),
-      brand: brandFor(row),
-      type: cardTypeFor(row),
-      number: field(row, "cardNumber"),
-      rookie: isRookie(row) ? "Y" : "N",
-      notes: field(row, "notes")
-    });
-
-    const response = await fetch(`${CONFIG.autoImageEndpoint}?${params.toString()}`, {
-      cache: "default"
+    const response = await fetch(CONFIG.imageBatchEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ cards })
     });
 
     let payload = {};
@@ -490,86 +606,95 @@ async function fetchAutoImageForRow(row) {
       payload = {};
     }
 
-    if (response.ok && payload.imageUrl) {
-      setCachedAutoImage(key, payload);
-      updatePlaceholdersForKey(key, payload.imageUrl);
-      imageRetryCount.delete(key);
-      return { status: "found" };
+    if (!response.ok) {
+      if (payload.code === "SERPER_NOT_CONFIGURED") {
+        imageProviderReady = false;
+        imageProviderBlocked = true;
+        setImageProviderStatus(
+          "error",
+          "Image search is not connected: Netlify cannot see SERPER_API_KEY."
+        );
+      } else {
+        setImageProviderStatus(
+          "error",
+          `Image search returned an error: ${payload.error || `HTTP ${response.status}`}`
+        );
+      }
+      return;
     }
 
-    if (response.status === 404) {
-      setCachedAutoImageMiss(key, 24);
-      imageRetryCount.delete(key);
-      return { status: "not-found" };
+    imageProviderReady = true;
+    imageProviderBlocked = false;
+
+    for (const result of payload.results || []) {
+      const key = result.key;
+      if (!key) continue;
+
+      if (result.imageUrl) {
+        setCachedAutoImage(key, result);
+        updatePlaceholdersForKey(key, result);
+        imagesFoundThisSession += 1;
+      } else {
+        setCachedAutoImageMiss(key, 12);
+        imagesMissedThisSession += 1;
+      }
     }
 
-    if (response.status === 503 && payload.code === "SERPER_NOT_CONFIGURED") {
-      console.warn("Serper API key has not been configured in Netlify.");
-      return { status: "not-configured" };
+    const providerErrors = payload.providerErrors || [];
+    if (providerErrors.length) {
+      setImageProviderStatus(
+        "error",
+        `Image provider error: ${providerErrors[0]}`
+      );
+    } else {
+      setImageProviderStatus(
+        "connected",
+        `Image search connected · ${imagesFoundThisSession} found this visit · ${imagesMissedThisSession} unmatched`
+      );
     }
-
-    return { status: "error" };
   } catch (error) {
-    console.warn("Auto image lookup failed:", key, error);
-    return { status: "error" };
-  } finally {
-    pendingImageKeys.delete(key);
+    setImageProviderStatus(
+      "error",
+      `Image batch failed: ${error.message}`
+    );
   }
-}
-
-function enqueueAutoImage(row, priority = false) {
-  const key = cardKey(row);
-  if (!key) return;
-
-  const existing = imageUrlFor(row);
-  if (existing) {
-    updatePlaceholdersForKey(key, existing);
-    return;
-  }
-
-  if (imageLookupRecentlyFailed(key)) return;
-  if (pendingImageKeys.has(key) || queuedImageKeys.has(key)) return;
-
-  queuedImageKeys.add(key);
-
-  if (priority) {
-    imageLookupQueue.unshift(row);
-  } else {
-    imageLookupQueue.push(row);
-  }
-
-  processImageQueue();
 }
 
 function processImageQueue() {
+  if (!imageProviderReady || imageProviderBlocked) return;
+
   while (
-    activeImageLookups < CONFIG.imageLookupConcurrency &&
+    activeImageBatches < CONFIG.imageBatchConcurrency &&
     imageLookupQueue.length
   ) {
-    const row = imageLookupQueue.shift();
-    const key = cardKey(row);
-    queuedImageKeys.delete(key);
+    const batch = [];
 
-    if (!key || imageUrlFor(row) || imageLookupRecentlyFailed(key)) {
-      continue;
+    while (
+      batch.length < CONFIG.imageBatchSize &&
+      imageLookupQueue.length
+    ) {
+      const row = imageLookupQueue.shift();
+      const key = cardKey(row);
+      queuedImageKeys.delete(key);
+
+      if (!key || imageDataFor(row)?.imageUrl || imageLookupRecentlyFailed(key)) {
+        continue;
+      }
+
+      batch.push(row);
     }
 
-    activeImageLookups += 1;
+    if (!batch.length) continue;
 
-    fetchAutoImageForRow(row)
-      .then(result => {
-        if (result.status === "error") {
-          const attempts = imageRetryCount.get(key) || 0;
-          if (attempts < CONFIG.imageLookupMaxRetries) {
-            imageRetryCount.set(key, attempts + 1);
-            setTimeout(() => enqueueAutoImage(row, false), 900);
-          } else {
-            imageRetryCount.delete(key);
-          }
-        }
-      })
+    activeImageBatches += 1;
+    setImageProviderStatus(
+      "searching",
+      `Searching for ${batch.length} card image${batch.length === 1 ? "" : "s"}…`
+    );
+
+    runImageBatch(batch)
       .finally(() => {
-        activeImageLookups -= 1;
+        activeImageBatches -= 1;
         processImageQueue();
       });
   }
@@ -588,13 +713,16 @@ function setupAutoImageLoading() {
 
       imageObserver.unobserve(entry.target);
     });
-  }, { rootMargin: "650px 0px" });
+  }, { rootMargin: "800px 0px" });
 
   document.querySelectorAll(".auto-image[data-index]").forEach(node => {
     imageObserver.observe(node);
   });
-}
 
+  // Do not rely solely on IntersectionObserver. Seed the first visible rows
+  // immediately so a browser/observer quirk cannot prevent the image pipeline.
+  rows.slice(0, 16).forEach(row => enqueueAutoImage(row));
+}
 function openDetails(index) {
   const row = rows[index];
   if (!row) return;
@@ -639,6 +767,7 @@ async function loadCards() {
 
   try {
     loadStoredImageCache();
+    checkImageProvider();
 
     const [response, manifestResponse] = await Promise.all([
       fetch(`${CONFIG.dataEndpoint}?ts=${Date.now()}`, { cache: "no-store" }),

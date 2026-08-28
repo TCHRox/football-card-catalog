@@ -110,3 +110,42 @@ In Netlify:
 7. Go to Deploys and trigger a new deploy.
 
 Do not put the API key directly into app.js or commit it to GitHub.
+
+
+## v11 — image pipeline rewrite
+
+The previous automated image pipeline had a major diagnostic flaw: the single
+De'Von Achane Phoenix image was hardcoded in `card-images.json`, so seeing it
+did not prove Serper or the Netlify image function was working.
+
+v11 changes the image architecture:
+
+- Adds a visible image-provider status beside the normal Live status.
+- The site explicitly checks whether the Netlify Function can see `SERPER_API_KEY`.
+- Missing API keys and provider errors are shown in the website instead of only in DevTools.
+- Replaces one-function-call-per-card with batches of up to 8 cards.
+- Runs up to two batches at once.
+- Seeds the first 16 cards immediately instead of relying solely on IntersectionObserver.
+- Uses the original result image first and Google's thumbnail as an automatic fallback.
+- Uses an exact search first; a broader second search only runs when needed.
+- Rejects low-confidence matches instead of showing likely-wrong cards.
+- Adds `netlify/functions/card-images-batch.mjs`.
+
+### Critical Netlify check
+
+Netlify's current documentation says a variable used by a serverless function
+must be available to the Functions scope when scope controls are available.
+Environment-variable changes also require a new deploy to take effect.
+
+Make sure:
+
+- Key name is exactly `SERPER_API_KEY`
+- The value is your Serper API key
+- Scope includes `Functions` if Netlify shows scope controls
+- Production context has the value
+- You trigger a fresh deploy after saving the variable
+
+After v11 loads, the site itself will say either:
+
+- `Images connected`
+- or a specific reason the image service is offline.
