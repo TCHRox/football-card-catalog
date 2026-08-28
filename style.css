@@ -1307,3 +1307,28 @@ select,
     flex-basis: 46px;
   }
 }
+
+
+/* v28 tweaks */
+.grade-badge {
+  background: #ff8c1a;
+  border-color: rgba(255,140,26,.95);
+  color: #1b2026;
+  box-shadow: 0 4px 14px rgba(255,140,26,.28);
+}
+.chart-line {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+/* v28 tweaks */
+.grade-badge {
+  background: #ff8c1a;
+  border-color: rgba(255,140,26,.95);
+  color: #1b2026;
+  box-shadow: 0 4px 14px rgba(255,140,26,.28);
+}
+.chart-line {
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}

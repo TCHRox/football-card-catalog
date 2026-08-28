@@ -1562,10 +1562,23 @@ function chartSvg(points) {
   const y = p => T + (1 - ((p - minY) / Math.max(.001, maxY - minY))) * plotH;
 
   const xy = clean.map(s => [x(s.timestamp), y(s.numericPrice)]);
-  const path = xy
-    .map((p,i) => `${i === 0 ? "M" : "L"} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`)
-    .join(" ");
-
+  const smoothPath = pts => {
+    if (pts.length < 2) return "";
+    let d = `M ${pts[0][0].toFixed(1)} ${pts[0][1].toFixed(1)}`;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const p0 = pts[i - 1] || pts[i];
+      const p1 = pts[i];
+      const p2 = pts[i + 1];
+      const p3 = pts[i + 2] || p2;
+      const cp1x = p1[0] + (p2[0] - p0[0]) / 6;
+      const cp1y = p1[1] + (p2[1] - p0[1]) / 6;
+      const cp2x = p2[0] - (p3[0] - p1[0]) / 6;
+      const cp2y = p2[1] - (p3[1] - p1[1]) / 6;
+      d += ` C ${cp1x.toFixed(1)} ${cp1y.toFixed(1)}, ${cp2x.toFixed(1)} ${cp2y.toFixed(1)}, ${p2[0].toFixed(1)} ${p2[1].toFixed(1)}`;
+    }
+    return d;
+  };
+  const path = smoothPath(xy);
   const yTicks = Array.from({length: 4}, (_, i) => {
     const ratio = i / 3;
     const price = maxY - (maxY - minY) * ratio;
