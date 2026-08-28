@@ -149,3 +149,30 @@ After v11 loads, the site itself will say either:
 
 - `Images connected`
 - or a specific reason the image service is offline.
+
+
+## v12 — Serper free-tier compatibility
+
+The v11 diagnostic exposed the exact upstream error:
+
+`Query pattern not allowed for free accounts`
+
+The API key and Netlify Function connection were working. The search request
+format was not compatible with Serper's free account.
+
+v12 fixes that:
+
+- Removes quotation marks and exact-match syntax from Serper queries.
+- Removes `#` and other search-operator punctuation from the query text.
+- Uses ordinary natural-language searches such as:
+  `De Von Achane 2023 Phoenix Base 130 rookie football card`
+- Requests 10 image results instead of 20.
+- Keeps Sports Card Investor / COMC / SportsCardsPro preference in our own
+  result-ranking code rather than using restrictive search operators.
+- The status now says `Images checking` when the API key is merely detected.
+- `Images connected` is shown only after an actual Serper search succeeds.
+- A provider failure blocks further batches and remains visibly red rather
+  than being overwritten by another batch.
+
+No Netlify environment-variable changes are needed if `SERPER_API_KEY` is
+already present and visible to Functions. Upload v12 and redeploy.

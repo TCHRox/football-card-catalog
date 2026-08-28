@@ -132,28 +132,50 @@ function scoreResult(result, card) {
   return score;
 }
 
+function safeQueryText(value) {
+  return String(value ?? "")
+    .normalize("NFKD")
+    .replace(/[\u0300-\u036f]/g, "")
+    // Avoid search operators / exact-match syntax that free Serper accounts
+    // may reject. Apostrophes and punctuation become ordinary spaces.
+    .replace(/["'`:#()+\[\]{}<>|\\/]/g, " ")
+    .replace(/[–—_-]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function buildQueries(card) {
-  const exact = [
-    `"${card.player}"`,
-    `"${card.year}"`,
-    `"${card.brand}"`,
-    card.type && card.type.toLowerCase() !== "parallel" ? `"${card.type}"` : "",
-    card.number ? `"${card.number}"` : "",
-    card.notes ? `"${card.notes}"` : "",
+  const player = safeQueryText(card.player);
+  const year = safeQueryText(card.year);
+  const brand = safeQueryText(card.brand);
+  const type = safeQueryText(card.type);
+  const number = safeQueryText(card.number);
+  const notes = safeQueryText(card.notes);
+
+  // The first query is intentionally plain natural language so it works on
+  // Serper's free account. No quotes, site:, OR, #, or other operators.
+  const primary = [
+    player,
+    year,
+    brand,
+    type,
+    number,
+    String(card.rookie).toUpperCase() === "Y" ? "rookie" : "",
     "football card"
   ].filter(Boolean).join(" ");
 
-  const broad = [
-    card.player,
-    card.year,
-    card.brand,
-    card.type,
-    card.number,
-    card.notes,
+  // The fallback stays operator-free but can use a useful note such as
+  // "Silver", "Refractor", or another parallel name.
+  const fallback = [
+    player,
+    year,
+    brand,
+    number,
+    notes,
     "football card"
   ].filter(Boolean).join(" ");
 
-  return [exact, broad];
+  return [...new Set([primary, fallback].filter(Boolean))];
 }
 
 function pickBest(images, card) {
@@ -310,14 +332,28 @@ export default async (request) => {
       if (item.status === "fulfilled") {
         results.push(item.value);
       } else {
-        providerErrors.push(item.reason?.message || "Unknown image provider error");
+        const message = item.reason?.message || "Unknown image provider error";
+        providerErrors.push(message);
         results.push({
           key: cards[index]?.key || "",
           imageUrl: "",
-          error: item.reason?.message || "Provider error"
+          error: message
         });
       }
     });
+
+    // A provider-level rejection is not the same as "no card image found".
+    // Return a real error status so the browser stops the queue and shows it.
+    if (providerErrors.length === cards.length) {
+      const first = providerErrors[0] || "Image provider rejected the searches.";
+      return json({
+        error: first,
+        code: /pattern not allowed/i.test(first)
+          ? "SERPER_FREE_QUERY_PATTERN"
+          : "SERPER_PROVIDER_ERROR",
+        providerErrors
+      }, 502);
+    }
 
     return json({
       results,

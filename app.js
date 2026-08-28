@@ -510,6 +510,8 @@ function setImageProviderStatus(state, detail = "") {
   } else if (state === "error") {
     pill.classList.add("error");
     text.textContent = "Images offline";
+  } else if (state === "checking") {
+    text.textContent = "Images checking";
   } else {
     text.textContent = "Images checking";
   }
@@ -539,8 +541,8 @@ async function checkImageProvider() {
     imageProviderReady = true;
     imageProviderBlocked = false;
     setImageProviderStatus(
-      "connected",
-      "Image search connected. Images load in batches as cards come into view."
+      "checking",
+      "Image API key detected. Testing the first real card searches…"
     );
     processImageQueue();
     return true;
@@ -607,9 +609,10 @@ async function runImageBatch(batch) {
     }
 
     if (!response.ok) {
+      imageProviderBlocked = true;
+
       if (payload.code === "SERPER_NOT_CONFIGURED") {
         imageProviderReady = false;
-        imageProviderBlocked = true;
         setImageProviderStatus(
           "error",
           "Image search is not connected: Netlify cannot see SERPER_API_KEY."
@@ -617,7 +620,7 @@ async function runImageBatch(batch) {
       } else {
         setImageProviderStatus(
           "error",
-          `Image search returned an error: ${payload.error || `HTTP ${response.status}`}`
+          `Image search stopped: ${payload.error || `HTTP ${response.status}`}`
         );
       }
       return;
@@ -642,11 +645,13 @@ async function runImageBatch(batch) {
 
     const providerErrors = payload.providerErrors || [];
     if (providerErrors.length) {
+      imageProviderBlocked = true;
       setImageProviderStatus(
         "error",
         `Image provider error: ${providerErrors[0]}`
       );
     } else {
+      imageProviderBlocked = false;
       setImageProviderStatus(
         "connected",
         `Image search connected · ${imagesFoundThisSession} found this visit · ${imagesMissedThisSession} unmatched`
