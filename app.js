@@ -4,6 +4,7 @@ const CONFIG = {
   imageManifest: "/card-images.json",
   imageBatchEndpoint: "/.netlify/functions/card-images-batch",
   customImageEndpoint: "/.netlify/functions/custom-card-image",
+  marketEndpoint: "/.netlify/functions/card-market",
   imageCacheStorageKey: "football-card-archive-image-cache-v5",
   imageBatchSize: 8,
   imageBatchConcurrency: 2,
@@ -67,6 +68,7 @@ let pageSize = 250;
 let currentPageRows = [];
 let activeDetailIndex = null;
 let customEditorOpen = false;
+const marketDataCache = new Map();
 
 const $ = (id) => document.getElementById(id);
 const norm = (s) => String(s ?? "")
@@ -1063,6 +1065,296 @@ function attachCustomEditorEvents(index) {
   }
 }
 
+
+function marketMoney(value) {
+  if (value === null || value === undefined || value === "") return "—";
+  const n = Number(String(value).replace(/[$,]/g, ""));
+  if (!Number.isFinite(n)) return "—";
+  return new Intl.NumberFormat("en-US", {
+    style: "currency",
+    currency: "USD",
+    minimumFractionDigits: n < 10 ? 2 : 0,
+    maximumFractionDigits: 2
+  }).format(n);
+}
+
+function marketSourceFor(row) {
+  const data = imageDataFor(row);
+  const page = data?.sourcePage || "";
+  return /sportscardspro\.com\/game\/football-cards/i.test(page) ? page : "";
+}
+
+function marketQuery(row) {
+  const params = new URLSearchParams({
+    player: fullName(row),
+    year: field(row, "year"),
+    brand: brandFor(row),
+    type: cardTypeFor(row),
+    number: field(row, "cardNumber"),
+    rookie: isRookie(row) ? "Y" : "N",
+    notes: field(row, "notes")
+  });
+
+  const preferredUrl = marketSourceFor(row);
+  if (preferredUrl) params.set("preferredUrl", preferredUrl);
+
+  return params;
+}
+
+function renderMarketLoading() {
+  return `
+    <section class="market-panel market-loading">
+      <div class="market-loading-head">
+        <div>
+          <div class="section-kicker">MARKET DATA</div>
+          <h3>Loading price history…</h3>
+        </div>
+        <span class="market-spinner" aria-hidden="true"></span>
+      </div>
+      <div class="market-skeleton chart-skeleton"></div>
+      <div class="grade-skeleton-row">
+        ${Array.from({length: 6}, () => '<div class="market-skeleton grade-skeleton"></div>').join("")}
+      </div>
+    </section>`;
+}
+
+function chartSvg(sales) {
+  const clean = (sales || [])
+    .map(s => ({
+      ...s,
+      timestamp: Date.parse(s.date),
+      numericPrice: Number(String(s.price || "").replace(/[$,]/g, ""))
+    }))
+    .filter(s => Number.isFinite(s.timestamp) && Number.isFinite(s.numericPrice))
+    .sort((a,b) => a.timestamp - b.timestamp)
+    .slice(-30);
+
+  if (clean.length < 2) {
+    return `
+      <div class="no-chart">
+        <strong>Not enough recent sales for a chart yet.</strong>
+        <span>Recent sales will still appear below when available.</span>
+      </div>`;
+  }
+
+  const W = 780;
+  const H = 245;
+  const L = 54;
+  const R = 22;
+  const T = 18;
+  const B = 40;
+  const plotW = W - L - R;
+  const plotH = H - T - B;
+
+  const minX = clean[0].timestamp;
+  const maxX = clean[clean.length - 1].timestamp;
+  let minY = Math.min(...clean.map(s => s.numericPrice));
+  let maxY = Math.max(...clean.map(s => s.numericPrice));
+
+  if (minY === maxY) {
+    minY = Math.max(0, minY * .75);
+    maxY = maxY * 1.25 + .25;
+  } else {
+    const pad = (maxY - minY) * .14;
+    minY = Math.max(0, minY - pad);
+    maxY += pad;
+  }
+
+  const x = t => L + ((t - minX) / Math.max(1, maxX - minX)) * plotW;
+  const y = p => T + (1 - ((p - minY) / Math.max(.001, maxY - minY))) * plotH;
+
+  const points = clean.map(s => [x(s.timestamp), y(s.numericPrice)]);
+  const path = points.map((p,i) => `${i === 0 ? "M" : "L"} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
+
+  const yTicks = Array.from({length: 4}, (_, i) => {
+    const ratio = i / 3;
+    const price = maxY - (maxY - minY) * ratio;
+    const yy = T + plotH * ratio;
+    return `
+      <line x1="${L}" x2="${W-R}" y1="${yy}" y2="${yy}" class="chart-gridline"/>
+      <text x="${L-10}" y="${yy+4}" class="chart-axis-label" text-anchor="end">${escapeHtml(marketMoney(price))}</text>`;
+  }).join("");
+
+  const firstDate = new Date(minX).toLocaleDateString(undefined, {month:"short", year:"numeric"});
+  const midDate = new Date((minX+maxX)/2).toLocaleDateString(undefined, {month:"short", year:"2-digit"});
+  const lastDate = new Date(maxX).toLocaleDateString(undefined, {month:"short", year:"numeric"});
+
+  const dots = clean.map(s => `
+    <circle cx="${x(s.timestamp).toFixed(1)}" cy="${y(s.numericPrice).toFixed(1)}" r="4" class="chart-dot">
+      <title>${escapeHtml(`${s.date}: ${marketMoney(s.numericPrice)}`)}</title>
+    </circle>`).join("");
+
+  return `
+    <svg class="sales-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Recent sale price chart">
+      ${yTicks}
+      <path d="${path}" class="chart-line"/>
+      ${dots}
+      <text x="${L}" y="${H-10}" class="chart-axis-label">${escapeHtml(firstDate)}</text>
+      <text x="${W/2}" y="${H-10}" class="chart-axis-label" text-anchor="middle">${escapeHtml(midDate)}</text>
+      <text x="${W-R}" y="${H-10}" class="chart-axis-label" text-anchor="end">${escapeHtml(lastDate)}</text>
+    </svg>`;
+}
+
+function preferredGradeCards(prices) {
+  const order = [
+    "Ungraded",
+    "Grade 8",
+    "Grade 9",
+    "Grade 9.5",
+    "SGC 10",
+    "CGC 10",
+    "PSA 10",
+    "BGS 10"
+  ];
+
+  const byLabel = new Map((prices || []).map(p => [p.label, p]));
+  return order
+    .map(label => byLabel.get(label))
+    .filter(Boolean)
+    .slice(0, 8);
+}
+
+function renderMarketData(data) {
+  if (!data || !data.found) {
+    return `
+      <section class="market-panel market-unavailable">
+        <div class="section-kicker">MARKET DATA</div>
+        <h3>No reliable SportsCardsPro match found</h3>
+        <p>${escapeHtml(data?.message || "This card may be too obscure, the set name may differ, or SportsCardsPro may not track it yet.")}</p>
+      </section>`;
+  }
+
+  const raw = (data.prices || []).find(p => p.label === "Ungraded");
+  const recent = data.sales || [];
+  const gradeCards = preferredGradeCards(data.prices);
+
+  const avg = recent.length
+    ? recent.reduce((sum,s) => sum + Number(s.numericPrice || 0), 0) / recent.length
+    : null;
+
+  return `
+    <section class="market-panel">
+      <div class="market-summary-row">
+        <div>
+          <div class="section-kicker">MARKET VALUE</div>
+          <div class="market-primary-value">${marketMoney(raw?.value)}</div>
+          <div class="market-small-label">Ungraded estimate</div>
+        </div>
+
+        <div class="market-mini-stat">
+          <span>Recent sales</span>
+          <strong>${recent.length || "—"}</strong>
+        </div>
+
+        <div class="market-mini-stat">
+          <span>Recent avg.</span>
+          <strong>${marketMoney(avg)}</strong>
+        </div>
+
+        <a class="source-link" href="${escapeHtml(data.sourceUrl)}" target="_blank" rel="noopener">
+          SportsCardsPro ↗
+        </a>
+      </div>
+
+      <div class="market-chart-card">
+        <div class="market-section-heading">
+          <div>
+            <div class="section-kicker">SALES HISTORY</div>
+            <h3>Recent sold prices</h3>
+          </div>
+          <span>${recent.length ? `${recent.length} sales` : "No recent sales"}</span>
+        </div>
+        ${chartSvg(recent)}
+      </div>
+
+      <div class="grade-section">
+        <div class="market-section-heading">
+          <div>
+            <div class="section-kicker">PRICE GUIDE</div>
+            <h3>Values by grade</h3>
+          </div>
+        </div>
+        <div class="grade-price-grid">
+          ${gradeCards.map(item => `
+            <div class="grade-price-card">
+              <span>${escapeHtml(item.label)}</span>
+              <strong>${marketMoney(item.value)}</strong>
+            </div>`).join("")}
+        </div>
+      </div>
+
+      <div class="recent-sales-section">
+        <div class="market-section-heading">
+          <div>
+            <div class="section-kicker">RECENT SALES</div>
+            <h3>Sold listings</h3>
+          </div>
+        </div>
+
+        ${recent.length ? `
+          <div class="sales-list">
+            ${recent.slice(0, 8).map(sale => `
+              <a class="sale-row" href="${escapeHtml(sale.url || data.sourceUrl)}" target="_blank" rel="noopener">
+                <span class="sale-date">${escapeHtml(sale.date || "")}</span>
+                <span class="sale-title">${escapeHtml(sale.title || "Completed sale")}</span>
+                <strong class="sale-price">${marketMoney(sale.numericPrice)}</strong>
+                <span class="sale-arrow">↗</span>
+              </a>`).join("")}
+          </div>` : `
+          <div class="market-empty-copy">SportsCardsPro has a price estimate for this card, but no recent sold listings were available to display.</div>
+        `}
+      </div>
+
+      <div class="market-source-note">
+        Market estimates and sold-listing history sourced from
+        <a href="${escapeHtml(data.sourceUrl)}" target="_blank" rel="noopener">SportsCardsPro</a>.
+      </div>
+    </section>`;
+}
+
+async function loadMarketData(index) {
+  const row = rows[index];
+  if (!row) return;
+
+  const key = cardKey(row);
+  const target = $("market-content");
+  if (!target) return;
+
+  if (marketDataCache.has(key)) {
+    target.innerHTML = renderMarketData(marketDataCache.get(key));
+    return;
+  }
+
+  try {
+    const response = await fetch(`${CONFIG.marketEndpoint}?${marketQuery(row).toString()}`);
+    const payload = await response.json().catch(() => ({}));
+
+    const data = response.ok
+      ? payload
+      : {
+          found: false,
+          message: payload.error || `Market lookup failed (${response.status}).`
+        };
+
+    marketDataCache.set(key, data);
+
+    // Don't overwrite a different card's modal if the user clicked elsewhere.
+    if (activeDetailIndex === index && $("market-content")) {
+      $("market-content").innerHTML = renderMarketData(data);
+    }
+  } catch (error) {
+    const data = {
+      found: false,
+      message: `Market lookup failed: ${error.message}`
+    };
+    marketDataCache.set(key, data);
+
+    if (activeDetailIndex === index && $("market-content")) {
+      $("market-content").innerHTML = renderMarketData(data);
+    }
+  }
+}
+
 function renderDetailContent(index) {
   const row = rows[index];
   if (!row) return;
@@ -1070,43 +1362,37 @@ function renderDetailContent(index) {
   activeDetailIndex = index;
   enqueueAutoImage(row, true);
 
-  const fields = Object.entries(row).filter(([,v]) => String(v ?? "").trim() !== "");
   const q = encodeURIComponent(cardQuery(row));
   const googleImages = `https://www.google.com/search?tbm=isch&q=${q}`;
   const ebaySold = `https://www.ebay.com/sch/i.html?_nkw=${q}&LH_Sold=1&LH_Complete=1`;
   const hasCustom = Boolean(customImageIndex[cardKey(row)]);
 
   $("dialog-content").innerHTML = `
-    <div class="detail-grid">
-      <div class="detail-image">${imageHtml(row, index, true)}</div>
-      <div class="detail-body">
-        ${metaLine(row) ? `<div class="eyebrow">${escapeHtml(metaLine(row))}</div>` : ""}
-        <h2>${escapeHtml(titleFor(row))}</h2>
-        ${subtitle(row) ? `<div class="detail-subtitle">${escapeHtml(subtitle(row))}</div>` : ""}
+    <div class="market-detail">
+      <aside class="market-card-column">
+        <div class="market-card-image">${imageHtml(row, index, true)}</div>
 
-        <div class="detail-table">
-          ${fields.map(([k,v]) => `
-            <div class="detail-field">
-              <span>${escapeHtml(k)}</span>
-              <strong>${escapeHtml(v)}</strong>
-            </div>`).join("")}
+        <div class="market-card-identity">
+          ${metaLine(row) ? `<div class="eyebrow">${escapeHtml(metaLine(row))}</div>` : ""}
+          <h2>${escapeHtml(titleFor(row))}</h2>
+          ${subtitle(row) ? `<div class="detail-subtitle">${escapeHtml(subtitle(row))}</div>` : ""}
         </div>
 
-        <div class="detail-actions">
-          <button class="primary" id="replace-image-btn" type="button">${hasCustom ? "Replace my image" : "Use my image"}</button>
-          ${hasCustom ? '<button class="danger" id="remove-custom-image-btn" type="button">Remove my image</button>' : ""}
-          <a href="${ebaySold}" target="_blank" rel="noopener">Recent eBay sales</a>
+        <div class="detail-actions compact-actions">
+          <button class="primary" id="replace-image-btn" type="button">${hasCustom ? "Replace image" : "Use my image"}</button>
+          ${hasCustom ? '<button class="danger" id="remove-custom-image-btn" type="button">Remove image</button>' : ""}
+          <a href="${ebaySold}" target="_blank" rel="noopener">More eBay sales</a>
           <a href="${googleImages}" target="_blank" rel="noopener">Image search</a>
         </div>
 
         <section id="custom-image-panel" class="custom-image-panel ${customEditorOpen ? "" : "hidden"}">
           <h3>Permanent custom image</h3>
-          <p>Paste an image with <strong>Ctrl+V</strong>, drag one here, or choose a file. It will be resized before upload and saved permanently for this card.</p>
+          <p>Paste an image with <strong>Ctrl+V</strong>, drag one here, or choose a file.</p>
 
           <div id="custom-image-dropzone" class="upload-dropzone">
             <div>
               <strong>Paste, drop, or choose an image</strong>
-              <span>On a phone, use Choose Image to select a photo from your library.</span>
+              <span>On a phone, choose a photo from your library.</span>
             </div>
           </div>
 
@@ -1118,12 +1404,18 @@ function renderDetailContent(index) {
 
           <div id="custom-upload-status" class="upload-status"></div>
         </section>
-      </div>
+      </aside>
+
+      <main class="market-detail-main">
+        <div id="market-content">
+          ${renderMarketLoading()}
+        </div>
+      </main>
     </div>`;
 
   attachCustomEditorEvents(index);
+  loadMarketData(index);
 }
-
 function openDetails(index) {
   customEditorOpen = false;
   renderDetailContent(index);

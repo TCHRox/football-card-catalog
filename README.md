@@ -264,3 +264,36 @@ deployments.
   card ID text.
 - Column G continues to be treated as a string everywhere in the site, so
   letters, hyphens, leading text, and other characters are part of the card ID.
+
+
+## v16 — market-focused card detail window
+
+The card detail modal has been redesigned as a market dashboard.
+
+### New detail layout
+- Large card image and compact identity information on the left.
+- Current ungraded estimate at the top.
+- Recent sold-price line chart.
+- Current values across common grades.
+- Up to eight recent sold listings with dates, titles, prices, and links.
+- SportsCardsPro source link and attribution.
+- Custom-image controls remain available but are visually secondary.
+
+### Market source
+v16 uses public SportsCardsPro card pages as the market-data source.
+
+When a card is opened:
+1. The site looks for a matching SportsCardsPro football-card page.
+2. It reads the current price guide.
+3. It reads recent completed-sale listings.
+4. The recent sales are used to draw the chart directly in the browser.
+
+The existing `SERPER_API_KEY` is reused only to locate the correct
+SportsCardsPro page when a direct source page is not already known.
+
+Market results are cached at the Netlify/CDN level for roughly six hours so
+opening the same card repeatedly does not continuously request the source site.
+
+Some obscure cards, parallels, or differently named sets may not match
+automatically. In those cases the detail modal remains usable and clearly says
+that no reliable market match was found.
