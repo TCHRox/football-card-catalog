@@ -71,3 +71,15 @@ https://www.sportscardinvestor.com/cards/de-von-achane-football/2023-phoenix-bas
 - Sports Card Investor URL generation now preserves apostrophes as word separators, so `De'Von` becomes `de-von`.
 - Added alternate player slug and brand variants for better lookup coverage.
 - Added more normal browser request headers to the image lookup function.
+
+
+## v9 changes
+
+- Sports Card Investor remains the primary image source.
+- Image lookups are now queued one at a time instead of firing many simultaneous requests.
+- Adds a 1.4-second delay between lookups to reduce source throttling.
+- Rate-limited requests are retried with a cooldown.
+- Failed matches are temporarily cached so the same missing card is not hammered repeatedly.
+- Added common set-name normalization, including `Donruss Optics` -> `Optic` / `Donruss Optic`.
+- Column O notes are now included in image matching and can help identify named parallels.
+- If the direct Sports Card Investor URL pattern fails, the server performs a web search restricted to Sports Card Investor and verifies the resulting card page before using its image.
