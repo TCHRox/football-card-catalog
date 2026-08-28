@@ -1199,3 +1199,111 @@ footer {
 .chart-grade-button:hover {
   border-color: rgba(255,140,26,.45);
 }
+
+/* v27 unified charcoal containers + lion shield brand mark */
+:root {
+  --bg: #181b1f;
+  --panel: #23272c;
+  --panel-2: #2a2f35;
+  --line: rgba(255,255,255,.10);
+  --accent: #ff8c1a;
+}
+
+body {
+  background: #181b1f;
+}
+
+.topbar,
+.controls,
+dialog,
+.market-card-column,
+.market-detail-main {
+  background: #202429;
+}
+
+.stat-card,
+.card,
+.sync-pill,
+.market-chart-card,
+.grade-section,
+.recent-sales-section,
+.market-unavailable,
+.custom-image-panel {
+  background: #24292f;
+}
+
+input,
+select,
+.button.secondary,
+.page-button,
+.market-summary-row > div,
+.market-summary-row > a,
+.grade-price-card,
+.sale-row,
+.detail-field,
+.detail-actions a,
+.detail-actions button,
+.chart-grade-button,
+.chart-range-controls {
+  background: #2a2f35;
+}
+
+.card-image-wrap,
+.card-image,
+.market-card-image,
+.detail-image {
+  background: #1d2024;
+}
+
+.sale-row:hover,
+.page-button:hover:not(:disabled),
+.button.secondary:hover,
+.detail-actions a:hover,
+.detail-actions button:hover {
+  background: #30363d;
+}
+
+.brand-mark-image {
+  width: 54px;
+  height: 54px;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  overflow: hidden;
+  background: transparent;
+  display: block;
+  flex: 0 0 54px;
+  clip-path: polygon(50% 1%, 77% 4%, 93% 13%, 98% 29%, 96% 54%, 86% 74%, 69% 89%, 50% 99%, 31% 89%, 14% 74%, 4% 54%, 2% 29%, 7% 13%, 23% 4%);
+}
+
+.brand-mark-image img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.card {
+  background: #24292f;
+}
+
+.card:hover {
+  background: #272d33;
+}
+
+.market-summary-row > div,
+.market-summary-row > a,
+.market-chart-card,
+.grade-section,
+.recent-sales-section,
+.grade-price-card {
+  box-shadow: none;
+}
+
+@media (max-width: 620px) {
+  .brand-mark-image {
+    width: 46px;
+    height: 46px;
+    flex-basis: 46px;
+  }
+}

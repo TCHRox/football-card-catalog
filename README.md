@@ -734,3 +734,12 @@ Keep:
 - `CARD_CATALOG_ADMIN_PASSWORD`
 
 `THE_CARD_API_KEY` remains unused.
+
+## v27 — charcoal containers + lion shield header mark
+
+- Replaced the circular `FC` brand mark in the upper-left header with the supplied orange/charcoal lion shield artwork.
+- Kept the existing favicon from v26.
+- Standardized the site's container surfaces to a neutral dark charcoal/steel-gray palette instead of the remaining blue/navy or mixed translucent panels.
+- Cards, stats, controls, status pills, modal panels, market panels, inputs, buttons, pagination controls, sales rows, and nested detail containers now use coordinated dark gray surfaces.
+- Orange remains the primary accent color.
+- Click-anywhere card behavior from v26 is unchanged.
