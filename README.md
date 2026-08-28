@@ -390,3 +390,55 @@ Keep:
 Remove:
 
 - `THE_CARD_API_KEY` — v18 no longer uses The Card API
+
+
+## v19 — faster market loading, broader matching, clickable sales
+
+### Faster first load
+v18 could require:
+1. Parse `search_cards`
+2. Parse `get_card`
+3. Parse `get_price_history`
+
+before the modal was fully populated.
+
+v19 changes discovery order:
+
+1. Reuse a SportsCardsPro URL already found by the site's image search, when available.
+2. Otherwise use the existing fast Serper API to locate the SportsCardsPro card page.
+3. Use Parse `search_cards` only as a fallback.
+4. Fetch `get_card` for chart and grade values.
+5. Load `get_price_history` asynchronously afterward.
+
+The chart and grade guide therefore no longer wait for the recent-sales request.
+
+### Better matching
+Parse search now has a second broader pass when the exact set wording fails.
+The validation remains strict on player, year, and card number so the site does
+not silently attach a different card.
+
+When no exact match passes validation, the modal can show the closest
+SportsCardsPro candidate to help identify a Sheet-data issue.
+
+Example discovered during v19 work:
+- 1989 Score Troy Aikman is #270.
+- SportsCardsPro's Troy Aikman #358 is a 1998 Ultra card.
+So a Sheet entry of `1989 / Score / Troy Aikman / 358` should *not* be
+automatically matched.
+
+### Clickable recent sales
+The current Parse SportsCardsPro contract documents sale date, title, price,
+and marketplace, but not the original listing URL.
+
+v19:
+- uses a direct sale URL automatically if Parse provides one now or adds it later;
+- otherwise makes the whole sale row clickable and opens an eBay completed-listing
+  search using the exact sale title (or a web search for non-eBay marketplaces).
+
+### No new environment variables
+Keep:
+- `SERPER_API_KEY`
+- `CARD_CATALOG_ADMIN_PASSWORD`
+- `PARSE_API_KEY`
+
+`THE_CARD_API_KEY` remains unused and can stay deleted.

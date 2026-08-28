@@ -5,6 +5,7 @@ const CONFIG = {
   imageBatchEndpoint: "/.netlify/functions/card-images-batch",
   customImageEndpoint: "/.netlify/functions/custom-card-image",
   marketEndpoint: "/.netlify/functions/card-market",
+  marketSalesEndpoint: "/.netlify/functions/card-market-sales",
   imageCacheStorageKey: "football-card-archive-image-cache-v5",
   imageBatchSize: 8,
   imageBatchConcurrency: 2,
@@ -1080,7 +1081,7 @@ function marketMoney(value) {
 }
 
 function marketQuery(row) {
-  return new URLSearchParams({
+  const params = new URLSearchParams({
     player: fullName(row),
     year: field(row, "year"),
     brand: brandFor(row),
@@ -1089,6 +1090,17 @@ function marketQuery(row) {
     rookie: isRookie(row) ? "Y" : "N",
     notes: field(row, "notes")
   });
+
+  // Reuse a SportsCardsPro page already discovered by the image search.
+  // This can completely skip the slower card-discovery step.
+  const autoImage = getCachedAutoImageData(cardKey(row));
+  const sourcePage = String(autoImage?.sourcePage || "");
+
+  if (/sportscardspro\.com\/game\//i.test(sourcePage)) {
+    params.set("preferredUrl", sourcePage);
+  }
+
+  return params;
 }
 
 function renderMarketLoading() {
@@ -1252,6 +1264,26 @@ function trendDepthLabel(points) {
   return `${months} months of history`;
 }
 
+function saleSearchUrl(sale) {
+  const direct = String(sale?.url || "").trim();
+  if (/^https?:\/\//i.test(direct)) return direct;
+
+  const title = String(sale?.title || "").trim();
+  if (!title) return "";
+
+  const marketplace = String(sale?.marketplace || "").toLowerCase();
+
+  if (!marketplace || marketplace.includes("ebay")) {
+    return `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(title)}&LH_Sold=1&LH_Complete=1`;
+  }
+
+  return `https://www.google.com/search?q=${encodeURIComponent(`${title} ${sale.marketplace || ""} sold`)}`;
+}
+
+function saleLinkLabel(sale) {
+  return sale?.url ? "Open sale" : "Find sale";
+}
+
 function renderMarketData(data, cardKeyValue) {
   if (!data || !data.found) {
     const needsSetup = data?.code === "PARSE_API_NOT_CONFIGURED";
@@ -1372,16 +1404,20 @@ function renderMarketData(data, cardKeyValue) {
         ${recent.length ? `
           <div class="sales-list">
             ${recent.slice(0, 10).map(sale => {
-              const content = `
-                <span class="sale-date">${escapeHtml(sale.date || "")}</span>
-                <span class="sale-title">${escapeHtml(sale.title || "Completed sale")}</span>
-                <strong class="sale-price">${marketMoney(sale.numericPrice)}</strong>
-                <span class="sale-arrow">${sale.url ? "↗" : ""}</span>`;
-
-              return sale.url
-                ? `<a class="sale-row" href="${escapeHtml(sale.url)}" target="_blank" rel="noopener">${content}</a>`
-                : `<div class="sale-row">${content}</div>`;
+              const href = saleSearchUrl(sale);
+              return `
+                <a class="sale-row" href="${escapeHtml(href)}" target="_blank" rel="noopener"
+                   title="${escapeHtml(saleLinkLabel(sale))}">
+                  <span class="sale-date">${escapeHtml(sale.date || "")}</span>
+                  <span class="sale-title">${escapeHtml(sale.title || "Completed sale")}</span>
+                  <strong class="sale-price">${marketMoney(sale.numericPrice)}</strong>
+                  <span class="sale-arrow">↗</span>
+                </a>`;
             }).join("")}
+          </div>` : data.salesPending ? `
+          <div class="sales-loading-row">
+            <span class="market-spinner" aria-hidden="true"></span>
+            <span>Loading recent completed sales…</span>
           </div>` : `
           <div class="market-empty-copy">
             No recent ungraded completed listings were returned for this card.
@@ -1393,7 +1429,8 @@ function renderMarketData(data, cardKeyValue) {
         Pricing, monthly historical trend data, and completed-sale history are sourced through
         the managed <a href="https://parse.bot/marketplace/6808cd1c-6144-442b-b0db-17727c37d562/sportscardspro-com-api"
         target="_blank" rel="noopener">SportsCardsPro API on Parse</a>.
-        Historical depth varies by card.
+        Historical depth varies by card. Sale rows open the original listing when a URL is available;
+        otherwise they open a sold-listing search using the exact sale title.
       </div>
     </section>`;
 }
@@ -1410,6 +1447,54 @@ function attachMarketRangeEvents(data, cardKeyValue) {
       attachMarketRangeEvents(data, cardKeyValue);
     });
   });
+}
+
+async function loadMarketSales(index, marketData) {
+  const row = rows[index];
+  if (!row || !marketData?.cardId) return;
+
+  const key = cardKey(row);
+
+  // get_card sometimes already includes sales; don't spend another API call if so.
+  if ((marketData.sales || []).length) return;
+
+  try {
+    const params = new URLSearchParams({
+      cardId: marketData.cardId,
+      title: `${fullName(row)} ${field(row, "year")} ${brandFor(row)} ${field(row, "cardNumber")}`
+    });
+
+    const response = await fetch(
+      `${CONFIG.marketSalesEndpoint}?${params.toString()}`,
+      { cache: "default" }
+    );
+
+    const payload = await response.json().catch(() => ({}));
+
+    if (!response.ok) {
+      marketData.salesPending = false;
+      marketData.salesError = payload.message || payload.error || `Sales lookup failed (${response.status}).`;
+    } else {
+      marketData.sales = payload.sales || [];
+      marketData.salesPending = false;
+    }
+
+    marketDataCache.set(key, marketData);
+
+    if (activeDetailIndex === index && $("market-content")) {
+      $("market-content").innerHTML = renderMarketData(marketData, key);
+      attachMarketRangeEvents(marketData, key);
+    }
+  } catch (error) {
+    marketData.salesPending = false;
+    marketData.salesError = error.message;
+    marketDataCache.set(key, marketData);
+
+    if (activeDetailIndex === index && $("market-content")) {
+      $("market-content").innerHTML = renderMarketData(marketData, key);
+      attachMarketRangeEvents(marketData, key);
+    }
+  }
 }
 
 async function loadMarketData(index) {
@@ -1443,11 +1528,19 @@ async function loadMarketData(index) {
           message: payload.message || payload.error || `Market lookup failed (${response.status}).`
         };
 
+    if (data.found && !(data.sales || []).length) {
+      data.salesPending = true;
+    }
+
     marketDataCache.set(key, data);
 
     if (activeDetailIndex === index && $("market-content")) {
       $("market-content").innerHTML = renderMarketData(data, key);
       attachMarketRangeEvents(data, key);
+    }
+
+    if (data.found && data.salesPending) {
+      loadMarketSales(index, data);
     }
   } catch (error) {
     const data = {

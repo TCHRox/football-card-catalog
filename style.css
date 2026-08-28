@@ -938,3 +938,24 @@ footer {
     flex-direction: column;
   }
 }
+
+
+/* v19 faster market load + clickable sales */
+.sales-loading-row {
+  min-height: 82px;
+  border: 1px dashed var(--line);
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 11px;
+  color: var(--muted);
+  font-size: .82rem;
+}
+.sale-row {
+  cursor: pointer;
+}
+.sale-row:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
