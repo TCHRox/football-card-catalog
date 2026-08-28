@@ -335,3 +335,58 @@ requiring code changes.
 Because some older/obscure cards may have no sale during a short window,
 the modal can legitimately show "No reliable recent sales found." This is
 different from the SportsCardsPro HTTP 403 failure.
+
+
+## v18 — SportsCardsPro market data through Parse
+
+The Card API has been removed from the market dashboard.
+
+v18 uses Parse's managed SportsCardsPro API:
+
+- Marketplace API:
+  https://parse.bot/marketplace/6808cd1c-6144-442b-b0db-17727c37d562/sportscardspro-com-api
+- Scraper ID:
+  `5e67e7a5-866b-4073-8d41-881feb8b574b`
+
+### Market dashboard
+
+- Current ungraded SportsCardsPro estimate
+- Full available grade price guide
+- Monthly historical price trend
+- 1Y / 5Y / All chart controls
+- Up to 30 recent completed ungraded sales when available
+- Direct SportsCardsPro source page
+
+Historical chart depth is not capped at 90 days. It uses however many monthly
+data points SportsCardsPro has indexed for that card.
+
+### Parse credit conservation
+
+The Netlify Function uses Netlify Blobs as a persistent cache:
+
+- the SportsCardsPro card match is cached for about 180 days;
+- market data is cached for 12 hours;
+- `get_price_history` is only called if `get_card` did not already include
+  recent-sale records.
+
+This reduces repeated Parse credit usage substantially.
+
+### Required environment variable
+
+Create a Parse account and generate an API key, then add this Netlify variable:
+
+`PARSE_API_KEY`
+
+Make sure Functions can access it, then redeploy.
+
+### v18 environment variable cleanup
+
+Keep:
+
+- `SERPER_API_KEY` — automatic card image search
+- `CARD_CATALOG_ADMIN_PASSWORD` — permanent custom-image uploads
+- `PARSE_API_KEY` — SportsCardsPro market dashboard
+
+Remove:
+
+- `THE_CARD_API_KEY` — v18 no longer uses The Card API

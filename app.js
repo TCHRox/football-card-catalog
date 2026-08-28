@@ -69,6 +69,7 @@ let currentPageRows = [];
 let activeDetailIndex = null;
 let customEditorOpen = false;
 const marketDataCache = new Map();
+const marketRangeByCard = new Map();
 
 const $ = (id) => document.getElementById(id);
 const norm = (s) => String(s ?? "")
@@ -1096,7 +1097,7 @@ function renderMarketLoading() {
       <div class="market-loading-head">
         <div>
           <div class="section-kicker">MARKET DATA</div>
-          <h3>Loading price history…</h3>
+          <h3>Loading SportsCardsPro history…</h3>
         </div>
         <span class="market-spinner" aria-hidden="true"></span>
       </div>
@@ -1107,28 +1108,31 @@ function renderMarketLoading() {
     </section>`;
 }
 
-function chartSvg(sales) {
-  const clean = (sales || [])
+function chartSvg(points) {
+  const clean = (points || [])
     .map(s => ({
       ...s,
       timestamp: Date.parse(s.date),
-      numericPrice: Number(String(s.price || "").replace(/[$,]/g, ""))
+      numericPrice: Number(
+        s.numericPrice !== undefined && s.numericPrice !== null
+          ? s.numericPrice
+          : String(s.price || "").replace(/[$,]/g, "")
+      )
     }))
     .filter(s => Number.isFinite(s.timestamp) && Number.isFinite(s.numericPrice))
-    .sort((a,b) => a.timestamp - b.timestamp)
-    .slice(-30);
+    .sort((a,b) => a.timestamp - b.timestamp);
 
   if (clean.length < 2) {
     return `
       <div class="no-chart">
-        <strong>Not enough recent sales for a chart yet.</strong>
-        <span>Recent sales will still appear below when available.</span>
+        <strong>Not enough historical data for a chart yet.</strong>
+        <span>Grade values and recent sales may still be available below.</span>
       </div>`;
   }
 
   const W = 780;
   const H = 245;
-  const L = 54;
+  const L = 58;
   const R = 22;
   const T = 18;
   const B = 40;
@@ -1152,8 +1156,10 @@ function chartSvg(sales) {
   const x = t => L + ((t - minX) / Math.max(1, maxX - minX)) * plotW;
   const y = p => T + (1 - ((p - minY) / Math.max(.001, maxY - minY))) * plotH;
 
-  const points = clean.map(s => [x(s.timestamp), y(s.numericPrice)]);
-  const path = points.map((p,i) => `${i === 0 ? "M" : "L"} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`).join(" ");
+  const xy = clean.map(s => [x(s.timestamp), y(s.numericPrice)]);
+  const path = xy
+    .map((p,i) => `${i === 0 ? "M" : "L"} ${p[0].toFixed(1)} ${p[1].toFixed(1)}`)
+    .join(" ");
 
   const yTicks = Array.from({length: 4}, (_, i) => {
     const ratio = i / 3;
@@ -1169,12 +1175,12 @@ function chartSvg(sales) {
   const lastDate = new Date(maxX).toLocaleDateString(undefined, {month:"short", year:"numeric"});
 
   const dots = clean.map(s => `
-    <circle cx="${x(s.timestamp).toFixed(1)}" cy="${y(s.numericPrice).toFixed(1)}" r="4" class="chart-dot">
+    <circle cx="${x(s.timestamp).toFixed(1)}" cy="${y(s.numericPrice).toFixed(1)}" r="3.5" class="chart-dot">
       <title>${escapeHtml(`${s.date}: ${marketMoney(s.numericPrice)}`)}</title>
     </circle>`).join("");
 
   return `
-    <svg class="sales-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Recent sale price chart">
+    <svg class="sales-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Historical card price chart">
       ${yTicks}
       <path d="${path}" class="chart-line"/>
       ${dots}
@@ -1187,16 +1193,22 @@ function chartSvg(sales) {
 function preferredGradeCards(prices) {
   const order = [
     "Ungraded",
-    "PSA 10", "PSA 9", "PSA 8",
-    "BGS 10", "BGS 9.5", "BGS 9",
-    "SGC 10", "SGC 9.5", "SGC 9",
-    "CGC 10", "CGC 9.5", "CGC 9"
+    "Grade 8",
+    "Grade 9",
+    "Grade 9.5",
+    "SGC 10",
+    "CGC 10",
+    "PSA 10",
+    "BGS 10",
+    "BGS 10 Black",
+    "CGC 10 Pristine",
+    "TAG 10",
+    "ACE 10"
   ];
 
   const byLabel = new Map((prices || []).map(p => [p.label, p]));
   const ordered = order.map(label => byLabel.get(label)).filter(Boolean);
 
-  // Append other available grades after the common ones.
   for (const item of prices || []) {
     if (!ordered.some(existing => existing.label === item.label)) {
       ordered.push(item);
@@ -1206,42 +1218,79 @@ function preferredGradeCards(prices) {
   return ordered.slice(0, 8);
 }
 
-function renderMarketData(data) {
+function filterTrendForRange(points, range) {
+  const sorted = (points || [])
+    .filter(p => Number.isFinite(Date.parse(p.date)))
+    .sort((a,b) => Date.parse(a.date) - Date.parse(b.date));
+
+  if (!sorted.length || range === "all") return sorted;
+
+  const newest = Date.parse(sorted[sorted.length - 1].date);
+  const years = range === "1y" ? 1 : 5;
+  const cutoff = new Date(newest);
+  cutoff.setFullYear(cutoff.getFullYear() - years);
+
+  return sorted.filter(p => Date.parse(p.date) >= cutoff.getTime());
+}
+
+function trendDepthLabel(points) {
+  const sorted = (points || [])
+    .filter(p => Number.isFinite(Date.parse(p.date)))
+    .sort((a,b) => Date.parse(a.date) - Date.parse(b.date));
+
+  if (sorted.length < 2) return "";
+
+  const first = new Date(sorted[0].date);
+  const last = new Date(sorted[sorted.length - 1].date);
+  const months = Math.max(
+    1,
+    (last.getFullYear() - first.getFullYear()) * 12 +
+    last.getMonth() - first.getMonth()
+  );
+
+  if (months >= 24) return `${(months / 12).toFixed(1)} years of history`;
+  return `${months} months of history`;
+}
+
+function renderMarketData(data, cardKeyValue) {
   if (!data || !data.found) {
-    const setupHelp = data?.code === "THE_CARD_API_NOT_CONFIGURED"
-      ? `
-        <div class="market-setup-help">
-          Add <code>THE_CARD_API_KEY</code> to Netlify Environment Variables,
-          make sure Functions can access it, then redeploy.
-        </div>`
-      : "";
+    const needsSetup = data?.code === "PARSE_API_NOT_CONFIGURED";
 
     return `
       <section class="market-panel market-unavailable">
         <div class="section-kicker">MARKET DATA</div>
-        <h3>${data?.code === "THE_CARD_API_NOT_CONFIGURED" ? "Market API needs setup" : "No reliable recent sales found"}</h3>
-        <p>${escapeHtml(data?.message || data?.error || "No matching completed sales were available in the current API lookback window.")}</p>
-        ${setupHelp}
+        <h3>${needsSetup ? "Market API needs setup" : "No reliable SportsCardsPro match found"}</h3>
+        <p>${escapeHtml(
+          data?.message ||
+          data?.error ||
+          "This card could not be matched confidently to SportsCardsPro."
+        )}</p>
+        ${needsSetup ? `
+          <div class="market-setup-help">
+            Add <code>PARSE_API_KEY</code> to Netlify Environment Variables,
+            make sure Functions can access it, then redeploy.
+          </div>` : ""}
       </section>`;
   }
 
   const raw = (data.prices || []).find(p => p.label === "Ungraded");
   const recent = data.sales || [];
-  const chartSales = data.chartSales || recent;
   const gradeCards = preferredGradeCards(data.prices);
+  const allTrend = data.trend || [];
+  const selectedRange = marketRangeByCard.get(cardKeyValue) || "5y";
+  const chartPoints = filterTrendForRange(allTrend, selectedRange);
 
   const avg = recent.length
     ? recent.reduce((sum,s) => sum + Number(s.numericPrice || 0), 0) / recent.length
     : null;
 
-  const marketValue = raw?.value ?? data.overallMedian ?? null;
-  const marketLabel = raw?.value !== null && raw?.value !== undefined
-    ? "Ungraded median"
-    : "Median matched sale";
+  const latestTrendPoint = allTrend
+    .filter(p => Number.isFinite(Number(p.numericPrice)))
+    .sort((a,b) => Date.parse(a.date) - Date.parse(b.date))
+    .at(-1);
 
-  const coverage = data.coverageDateFrom && data.coverageDateTo
-    ? `${data.coverageDateFrom} – ${data.coverageDateTo}`
-    : (data.lookbackLabel || "Current plan window");
+  const marketValue = raw?.value ?? latestTrendPoint?.numericPrice ?? null;
+  const historyDepth = trendDepthLabel(allTrend);
 
   return `
     <section class="market-panel">
@@ -1249,12 +1298,12 @@ function renderMarketData(data) {
         <div>
           <div class="section-kicker">MARKET VALUE</div>
           <div class="market-primary-value">${marketMoney(marketValue)}</div>
-          <div class="market-small-label">${escapeHtml(marketLabel)}</div>
+          <div class="market-small-label">Current ungraded estimate</div>
         </div>
 
         <div class="market-mini-stat">
-          <span>Matched sales</span>
-          <strong>${data.totalMatched || recent.length || "—"}</strong>
+          <span>Recent sales</span>
+          <strong>${recent.length || "—"}</strong>
         </div>
 
         <div class="market-mini-stat">
@@ -1262,44 +1311,53 @@ function renderMarketData(data) {
           <strong>${marketMoney(avg)}</strong>
         </div>
 
-        <a class="source-link" href="https://www.thecardapi.com/" target="_blank" rel="noopener">
-          The Card API ↗
+        <a class="source-link" href="${escapeHtml(data.sourceUrl || "https://www.sportscardspro.com/")}" target="_blank" rel="noopener">
+          SportsCardsPro ↗
         </a>
       </div>
 
-      <div class="market-coverage-note">
-        Sales coverage shown: <strong>${escapeHtml(coverage)}</strong>.
-        ${data.planNote ? escapeHtml(data.planNote) : ""}
-      </div>
-
       <div class="market-chart-card">
-        <div class="market-section-heading">
+        <div class="market-section-heading chart-heading-with-controls">
           <div>
-            <div class="section-kicker">SALES HISTORY</div>
-            <h3>${data.chartLabel ? escapeHtml(data.chartLabel) : "Recent sold prices"}</h3>
+            <div class="section-kicker">PRICE HISTORY</div>
+            <h3>Ungraded market trend</h3>
+            ${historyDepth ? `<span class="history-depth">${escapeHtml(historyDepth)} available</span>` : ""}
           </div>
-          <span>${recent.length ? `${recent.length} matched sales` : "No recent sales"}</span>
+
+          <div class="chart-range-controls" role="group" aria-label="Chart range">
+            ${[
+              ["1y", "1Y"],
+              ["5y", "5Y"],
+              ["all", "All"]
+            ].map(([value,label]) => `
+              <button type="button"
+                class="chart-range-button ${selectedRange === value ? "active" : ""}"
+                data-market-range="${value}">
+                ${label}
+              </button>`).join("")}
+          </div>
         </div>
-        ${chartSvg(chartSales)}
+
+        ${chartSvg(chartPoints)}
       </div>
 
       <div class="grade-section">
         <div class="market-section-heading">
           <div>
-            <div class="section-kicker">PRICE BY CONDITION</div>
-            <h3>Recent median values</h3>
+            <div class="section-kicker">PRICE GUIDE</div>
+            <h3>Values by grade</h3>
           </div>
         </div>
+
         ${gradeCards.length ? `
           <div class="grade-price-grid">
             ${gradeCards.map(item => `
               <div class="grade-price-card">
                 <span>${escapeHtml(item.label)}</span>
                 <strong>${marketMoney(item.value)}</strong>
-                <small>${item.sales} sale${item.sales === 1 ? "" : "s"}</small>
               </div>`).join("")}
           </div>` : `
-          <div class="market-empty-copy">No grade-specific sales were found in the current lookback window.</div>
+          <div class="market-empty-copy">No grade-specific prices are currently available for this card.</div>
         `}
       </div>
 
@@ -1313,27 +1371,45 @@ function renderMarketData(data) {
 
         ${recent.length ? `
           <div class="sales-list">
-            ${recent.slice(0, 10).map(sale => `
-              <a class="sale-row" href="${escapeHtml(sale.url || "#")}" target="_blank" rel="noopener">
+            ${recent.slice(0, 10).map(sale => {
+              const content = `
                 <span class="sale-date">${escapeHtml(sale.date || "")}</span>
-                <span class="sale-title">
-                  ${escapeHtml(sale.title || "Completed sale")}
-                  ${sale.gradeLabel ? `<em>${escapeHtml(sale.gradeLabel)}</em>` : ""}
-                </span>
+                <span class="sale-title">${escapeHtml(sale.title || "Completed sale")}</span>
                 <strong class="sale-price">${marketMoney(sale.numericPrice)}</strong>
-                <span class="sale-arrow">↗</span>
-              </a>`).join("")}
+                <span class="sale-arrow">${sale.url ? "↗" : ""}</span>`;
+
+              return sale.url
+                ? `<a class="sale-row" href="${escapeHtml(sale.url)}" target="_blank" rel="noopener">${content}</a>`
+                : `<div class="sale-row">${content}</div>`;
+            }).join("")}
           </div>` : `
-          <div class="market-empty-copy">No recent matching completed listings were available.</div>
+          <div class="market-empty-copy">
+            No recent ungraded completed listings were returned for this card.
+          </div>
         `}
       </div>
 
       <div class="market-source-note">
-        Completed-sale data sourced from
-        <a href="https://www.thecardapi.com/" target="_blank" rel="noopener">The Card API</a>.
-        Prices are calculated from matched sales in your API plan's available lookback window.
+        Pricing, monthly historical trend data, and completed-sale history are sourced through
+        the managed <a href="https://parse.bot/marketplace/6808cd1c-6144-442b-b0db-17727c37d562/sportscardspro-com-api"
+        target="_blank" rel="noopener">SportsCardsPro API on Parse</a>.
+        Historical depth varies by card.
       </div>
     </section>`;
+}
+
+function attachMarketRangeEvents(data, cardKeyValue) {
+  document.querySelectorAll("[data-market-range]").forEach(button => {
+    button.addEventListener("click", () => {
+      marketRangeByCard.set(cardKeyValue, button.dataset.marketRange || "5y");
+
+      const target = $("market-content");
+      if (!target) return;
+
+      target.innerHTML = renderMarketData(data, cardKeyValue);
+      attachMarketRangeEvents(data, cardKeyValue);
+    });
+  });
 }
 
 async function loadMarketData(index) {
@@ -1345,36 +1421,44 @@ async function loadMarketData(index) {
   if (!target) return;
 
   if (marketDataCache.has(key)) {
-    target.innerHTML = renderMarketData(marketDataCache.get(key));
+    const cached = marketDataCache.get(key);
+    target.innerHTML = renderMarketData(cached, key);
+    attachMarketRangeEvents(cached, key);
     return;
   }
 
   try {
-    const response = await fetch(`${CONFIG.marketEndpoint}?${marketQuery(row).toString()}`);
+    const response = await fetch(
+      `${CONFIG.marketEndpoint}?${marketQuery(row).toString()}`,
+      { cache: "default" }
+    );
+
     const payload = await response.json().catch(() => ({}));
 
     const data = response.ok
       ? payload
       : {
           found: false,
-          message: payload.error || `Market lookup failed (${response.status}).`
+          code: payload.code || "",
+          message: payload.message || payload.error || `Market lookup failed (${response.status}).`
         };
 
     marketDataCache.set(key, data);
 
-    // Don't overwrite a different card's modal if the user clicked elsewhere.
     if (activeDetailIndex === index && $("market-content")) {
-      $("market-content").innerHTML = renderMarketData(data);
+      $("market-content").innerHTML = renderMarketData(data, key);
+      attachMarketRangeEvents(data, key);
     }
   } catch (error) {
     const data = {
       found: false,
       message: `Market lookup failed: ${error.message}`
     };
+
     marketDataCache.set(key, data);
 
     if (activeDetailIndex === index && $("market-content")) {
-      $("market-content").innerHTML = renderMarketData(data);
+      $("market-content").innerHTML = renderMarketData(data, key);
     }
   }
 }
