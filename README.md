@@ -675,3 +675,62 @@ searches at 600 during one background run. If the collection has more unique
 player/year groups than the free allowance can cover in the first month, the
 sync will preserve all progress and can resume later. A one-month CardSight Pro
 upgrade is the fastest option if the initial mapping exhausts the free quota.
+
+
+## v25 — CardSight sync diagnostics and rate-limit fix
+
+v24's sync UI could hide failures and its progress wording was misleading.
+
+### What was wrong in v24
+
+- `Sync Market` reused the admin password stored in sessionStorage by the custom
+  image editor, so it often did not visibly ask for a password.
+- The background function's authorization/API failures were not visible to the
+  browser because background functions return immediately.
+- Every card without a successful match was displayed as "unresolved," even if
+  its player/year group had not been processed yet.
+- CardSight Free allows 4 requests/second. v24 waited between outer player
+  groups, but one group could perform several pagination requests back-to-back,
+  creating a rate-limit burst.
+
+### v25 changes
+
+- Manual **Sync Market always asks for the catalog admin password**.
+- New regular `cardsight-sync-start` function:
+  - validates the admin password;
+  - verifies `CARDSIGHTAI_API_KEY` against CardSight before starting;
+  - writes a visible queued status;
+  - then launches the background job.
+- Every CardSight HTTP request is globally throttled to at least 350ms apart.
+- HTTP 429 responses retry automatically with backoff.
+- The page now has a real progress bar.
+- Matching shows:
+  - player/year groups processed;
+  - matched rows;
+  - genuinely unmatched rows;
+  - pending rows;
+  - valued rows;
+  - CardSight API calls used during this run.
+- Pricing shows:
+  - canonical card IDs priced / total;
+  - catalog rows valued;
+  - API calls used.
+- Errors remain red and visible instead of reverting to "Market ready."
+- Existing v24 unresolved rows are retried because v25 uses a new matcher
+  version.
+- When CardSight's catalog card already provides Raw / PSA 9 / PSA 10 prices,
+  v25 stores those immediately during matching. Values can therefore appear
+  before the final bulk-pricing phase completes.
+
+### Existing setup remains valid
+
+No new Netlify variables are required.
+
+Keep:
+
+- `CARDSIGHTAI_API_KEY`
+- `SERPER_API_KEY`
+- `PARSE_API_KEY`
+- `CARD_CATALOG_ADMIN_PASSWORD`
+
+`THE_CARD_API_KEY` remains unused.

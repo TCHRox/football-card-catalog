@@ -32,6 +32,12 @@
         <p id="status-line">Connecting to Google Sheets…</p>
         <p id="image-status-line" class="image-status-line">Image search: checking connection…</p>
         <p id="market-status-line" class="image-status-line">Market values: checking database…</p>
+        <div id="market-progress-wrap" class="market-progress-wrap hidden" aria-live="polite">
+          <div class="market-progress-track">
+            <div id="market-progress-bar" class="market-progress-bar"></div>
+          </div>
+          <div id="market-progress-detail" class="market-progress-detail"></div>
+        </div>
       </div>
       <div class="status-pills">
         <div class="sync-pill" id="market-sync-pill">

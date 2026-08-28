@@ -7,13 +7,13 @@ const CONFIG = {
   marketEndpoint: "/.netlify/functions/card-market",
   marketSalesEndpoint: "/.netlify/functions/card-market-sales",
   marketIndexEndpoint: "/.netlify/functions/cardsight-market-index",
-  marketSyncEndpoint: "/.netlify/functions/cardsight-sync-background",
+  marketSyncEndpoint: "/.netlify/functions/cardsight-sync-start",
   imageCacheStorageKey: "football-card-archive-image-cache-v5",
   imageBatchSize: 8,
   imageBatchConcurrency: 2,
   initialImageLookahead: 48,
   defaultPageSize: 250,
-  marketPollMs: 8000
+  marketPollMs: 4000
 };
 
 const ALIASES = {
@@ -609,32 +609,138 @@ function marketDateLabel(value) {
 
 function renderMarketSyncStatus() {
   const status = marketSyncStatus || {};
+  const progressWrap = $("market-progress-wrap");
+  const progressBar = $("market-progress-bar");
+  const progressDetail = $("market-progress-detail");
+  const syncButton = $("market-sync-btn");
+
+  const hideProgress = () => {
+    progressWrap?.classList.add("hidden");
+    if (progressBar) progressBar.style.width = "0%";
+    if (progressDetail) progressDetail.textContent = "";
+  };
+
+  const showProgress = (percent, detail) => {
+    progressWrap?.classList.remove("hidden");
+    if (progressBar) {
+      progressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
+    }
+    if (progressDetail) progressDetail.textContent = detail;
+  };
+
+  if (syncButton) {
+    syncButton.disabled = Boolean(status.running || status.phase === "queued");
+    syncButton.textContent = status.running || status.phase === "queued"
+      ? "Syncing Market…"
+      : "Sync Market";
+  }
 
   if (!status.configured) {
+    hideProgress();
     setMarketProviderStatus(
       "error",
-      "Market values need CARDSIGHTAI_API_KEY in Netlify."
+      status.error || "Market values need CARDSIGHTAI_API_KEY in Netlify."
     );
+    return;
+  }
+
+  if (status.phase === "error" || status.error) {
+    hideProgress();
+
+    const matched = Number(status.matchedRows || 0).toLocaleString();
+    const valued = Number(status.valuedRows || 0).toLocaleString();
+    const apiCalls = Number(status.apiCallsThisRun || 0).toLocaleString();
+
+    setMarketProviderStatus(
+      "error",
+      `Market sync stopped: ${status.error || "Unknown error"} · ${matched} matched · ${valued} valued · ${apiCalls} API calls this run`
+    );
+    return;
+  }
+
+  if (status.phase === "queued") {
+    setMarketProviderStatus(
+      "searching",
+      "Market sync queued. Starting background job…"
+    );
+    showProgress(1, "Starting…");
     return;
   }
 
   if (status.running) {
-    const matched = Number(status.matchedRows || 0).toLocaleString();
-    const total = Number(status.totalRows || rows.length || 0).toLocaleString();
-    const valued = Number(status.valuedRows || 0).toLocaleString();
+    const total = Number(status.totalRows || rows.length || 0);
+    const matched = Number(status.matchedRows || 0);
+    const unresolved = Number(status.unresolvedRows || 0);
+    const pending = Number(
+      status.pendingRows ??
+      Math.max(0, total - matched - unresolved)
+    );
+    const valued = Number(status.valuedRows || 0);
+    const apiCalls = Number(status.apiCallsThisRun || 0);
+
+    if (status.phase === "matching") {
+      const done = Number(status.matchGroupsProcessed || 0);
+      const groupTotal = Number(status.matchGroupsTotal || 0);
+      const pct = groupTotal ? (done / groupTotal) * 100 : 0;
+
+      setMarketProviderStatus(
+        "searching",
+        status.phaseLabel || "Matching cards to CardSight"
+      );
+
+      showProgress(
+        pct,
+        `${done.toLocaleString()} / ${groupTotal.toLocaleString()} player-year groups · ` +
+        `${matched.toLocaleString()} matched · ${unresolved.toLocaleString()} unmatched · ` +
+        `${pending.toLocaleString()} pending · ${valued.toLocaleString()} valued · ` +
+        `${apiCalls.toLocaleString()} API calls`
+      );
+      return;
+    }
+
+    if (status.phase === "pricing") {
+      const done = Number(status.priceIdsProcessed || 0);
+      const priceTotal = Number(status.priceIdsTotal || 0);
+      const pct = priceTotal ? (done / priceTotal) * 100 : 0;
+
+      setMarketProviderStatus(
+        "searching",
+        status.phaseLabel || "Refreshing market prices"
+      );
+
+      showProgress(
+        pct,
+        `${done.toLocaleString()} / ${priceTotal.toLocaleString()} matched card IDs priced · ` +
+        `${valued.toLocaleString()} catalog entries valued · ` +
+        `${apiCalls.toLocaleString()} API calls`
+      );
+      return;
+    }
 
     setMarketProviderStatus(
       "searching",
-      `${status.phaseLabel || "Market sync in progress"} · ${matched}/${total} matched · ${valued} valued`
+      status.phaseLabel || "Market sync in progress"
+    );
+    showProgress(
+      Number(status.progressPercent || 0),
+      `${matched.toLocaleString()} matched · ${valued.toLocaleString()} valued`
     );
     return;
   }
 
+  hideProgress();
+
   const matched = Number(status.matchedRows || 0);
   const valued = Number(status.valuedRows || 0);
   const total = Number(status.totalRows || rows.length || 0);
-  const unresolved = Number(status.unresolvedRows || Math.max(0, total - matched));
-  const refreshed = marketDateLabel(status.lastPriceRefreshAt || status.lastCompletedAt);
+  const unresolved = Number(status.unresolvedRows || 0);
+  const pending = Number(
+    status.pendingRows ??
+    Math.max(0, total - matched - unresolved)
+  );
+  const refreshed = marketDateLabel(
+    status.lastPriceRefreshAt || status.lastCompletedAt
+  );
 
   if (!matched && !valued) {
     setMarketProviderStatus(
@@ -645,12 +751,13 @@ function renderMarketSyncStatus() {
   }
 
   const updatedCopy = refreshed ? ` · refreshed ${refreshed}` : "";
+
   setMarketProviderStatus(
     "connected",
-    `${valued.toLocaleString()} valued · ${matched.toLocaleString()}/${total.toLocaleString()} matched · ${unresolved.toLocaleString()} unresolved${updatedCopy}`
+    `${valued.toLocaleString()} valued · ${matched.toLocaleString()}/${total.toLocaleString()} matched · ` +
+    `${unresolved.toLocaleString()} unmatched · ${pending.toLocaleString()} pending${updatedCopy}`
   );
 }
-
 async function loadPersistentMarketIndex({ rerender = false } = {}) {
   try {
     const response = await fetch(
@@ -697,16 +804,24 @@ function scheduleMarketPoll() {
 }
 
 async function startMarketSync() {
-  const password = requestAdminPassword();
+  const password = window.prompt("Enter the catalog admin password to start the market sync:");
   if (!password) return;
 
   const button = $("market-sync-btn");
-  if (button) button.disabled = true;
+  if (button) {
+    button.disabled = true;
+    button.textContent = "Starting…";
+  }
 
-  setMarketProviderStatus(
-    "searching",
-    "Starting market sync…"
-  );
+  marketSyncStatus = {
+    ...marketSyncStatus,
+    configured: true,
+    running: false,
+    phase: "queued",
+    error: ""
+  };
+
+  renderMarketSyncStatus();
 
   try {
     const response = await fetch(CONFIG.marketSyncEndpoint, {
@@ -716,24 +831,45 @@ async function startMarketSync() {
       }
     });
 
+    const payload = await response.json().catch(() => ({}));
+
     if (response.status === 401) {
-      sessionStorage.removeItem("football-card-admin-password");
       throw new Error("Incorrect catalog admin password.");
     }
 
     if (!response.ok && response.status !== 202) {
-      const payload = await response.json().catch(() => ({}));
-      throw new Error(payload.error || `Could not start sync (${response.status}).`);
+      throw new Error(
+        payload.error ||
+        payload.message ||
+        `Could not start sync (${response.status}).`
+      );
     }
 
-    marketSyncStatus.running = true;
-    marketSyncStatus.phaseLabel = "Market sync starting";
+    // Keep the same password available for custom-image editing during this tab.
+    sessionStorage.setItem("football-card-admin-password", password);
+
+    marketSyncStatus = payload.status || {
+      ...marketSyncStatus,
+      running: true,
+      phase: "queued"
+    };
+
     renderMarketSyncStatus();
     scheduleMarketPoll();
   } catch (error) {
-    setMarketProviderStatus("error", error.message);
+    marketSyncStatus = {
+      ...marketSyncStatus,
+      configured: true,
+      running: false,
+      phase: "error",
+      error: error.message
+    };
+    renderMarketSyncStatus();
   } finally {
-    if (button) button.disabled = false;
+    if (button && !marketSyncStatus.running && marketSyncStatus.phase !== "queued") {
+      button.disabled = false;
+      button.textContent = "Sync Market";
+    }
   }
 }
 

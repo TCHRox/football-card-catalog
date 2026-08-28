@@ -9,6 +9,29 @@ export const MATCH_INDEX_KEY = "__match_index__";
 export const MARKET_STATUS_KEY = "__status__";
 
 const API_BASE = "https://api.cardsight.ai";
+const MIN_API_INTERVAL_MS = 350;
+let lastApiRequestAt = 0;
+let apiCallsThisRun = 0;
+
+export function resetApiCallStats() {
+  apiCallsThisRun = 0;
+  lastApiRequestAt = 0;
+}
+
+export function getApiCallStats() {
+  return {
+    calls: apiCallsThisRun
+  };
+}
+
+async function waitForApiSlot() {
+  const elapsed = Date.now() - lastApiRequestAt;
+  const wait = Math.max(0, MIN_API_INTERVAL_MS - elapsed);
+
+  if (wait) {
+    await new Promise(resolve => setTimeout(resolve, wait));
+  }
+}
 
 export function norm(value) {
   return String(value ?? "")
@@ -172,34 +195,55 @@ function apiErrorMessage(payload, response) {
 }
 
 export async function cardSightRequest(apiKey, path, options = {}) {
-  const response = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      "X-API-Key": apiKey,
-      "Accept": "application/json",
-      ...(options.body ? { "Content-Type": "application/json" } : {}),
-      ...(options.headers || {})
+  const maxAttempts = 4;
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    await waitForApiSlot();
+
+    lastApiRequestAt = Date.now();
+    apiCallsThisRun += 1;
+
+    const response = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        "X-API-Key": apiKey,
+        "Accept": "application/json",
+        ...(options.body ? { "Content-Type": "application/json" } : {}),
+        ...(options.headers || {})
+      }
+    });
+
+    const text = await response.text();
+    let payload = {};
+
+    try {
+      payload = JSON.parse(text);
+    } catch {
+      payload = {};
     }
-  });
 
-  const text = await response.text();
-  let payload = {};
+    if (response.ok) {
+      return payload;
+    }
 
-  try {
-    payload = JSON.parse(text);
-  } catch {
-    payload = {};
-  }
-
-  if (!response.ok) {
     const error = new Error(apiErrorMessage(payload, response));
     error.status = response.status;
+
+    if (response.status === 429 && attempt < maxAttempts - 1) {
+      const retryAfterHeader = Number(response.headers.get("retry-after") || 0);
+      const retryMs = retryAfterHeader > 0
+        ? retryAfterHeader * 1000
+        : Math.min(8000, 1200 * (2 ** attempt));
+
+      await new Promise(resolve => setTimeout(resolve, retryMs));
+      continue;
+    }
+
     throw error;
   }
 
-  return payload;
+  throw new Error("CardSight request failed after retries.");
 }
-
 function unwrap(payload) {
   return payload?.data !== undefined ? payload.data : payload;
 }
@@ -387,6 +431,61 @@ function matchParallel(card, row) {
   };
 }
 
+function catalogPrices(card) {
+  const prices = card?.prices || {};
+
+  const value = (...keys) => {
+    for (const key of keys) {
+      const raw = prices?.[key];
+      if (raw === null || raw === undefined || raw === "") continue;
+      const n = Number(String(raw).replace(/[$,\s]/g, ""));
+      if (Number.isFinite(n)) return n;
+    }
+    return null;
+  };
+
+  return {
+    ungraded: value("raw", "ungraded"),
+    psa9: value("psa_9", "psa9", "grade_9"),
+    psa10: value("psa_10", "psa10")
+  };
+}
+
+export function buildSummaryFromCatalogMatch(match, existing = {}) {
+  const prices = match?.catalogPrices || {};
+
+  const hasAny =
+    Number.isFinite(Number(prices.ungraded)) ||
+    Number.isFinite(Number(prices.psa9)) ||
+    Number.isFinite(Number(prices.psa10));
+
+  if (!hasAny) return existing || {};
+
+  return {
+    ...existing,
+    ungraded: Number.isFinite(Number(prices.ungraded))
+      ? Number(prices.ungraded)
+      : existing.ungraded ?? null,
+    psa9: Number.isFinite(Number(prices.psa9))
+      ? Number(prices.psa9)
+      : existing.psa9 ?? existing.grade9 ?? null,
+    grade9: Number.isFinite(Number(prices.psa9))
+      ? Number(prices.psa9)
+      : existing.grade9 ?? existing.psa9 ?? null,
+    psa10: Number.isFinite(Number(prices.psa10))
+      ? Number(prices.psa10)
+      : existing.psa10 ?? null,
+    changes: existing.changes || {
+      ungraded: null,
+      psa9: null,
+      grade9: null,
+      psa10: null
+    },
+    source: existing.source || "CardSight catalog",
+    updatedAt: Date.now()
+  };
+}
+
 export function matchRowToCandidate(row, candidates) {
   const playerTokens = fuzzyNorm(row.player).split(/\s+/).filter(Boolean);
   const brandTokens = normalizedBrand(row.brand).split(/\s+/).filter(Boolean);
@@ -458,6 +557,8 @@ export function matchRowToCandidate(row, candidates) {
       parallelName: parallel?.parallelName || "",
       matchScore: candidate.score,
       matchedAt: Date.now(),
+      matcherVersion: 25,
+      catalogPrices: catalogPrices(candidate.card),
       candidate: {
         name: candidateName(candidate.card),
         year: candidateYear(candidate.card),
@@ -708,11 +809,21 @@ export function resultMapByCardId(results) {
   return map;
 }
 
-export function groupUnmatchedRows(cards, matches) {
+export function groupUnmatchedRows(cards, matches, { retryUnresolved = false } = {}) {
   const groups = new Map();
 
   for (const card of cards) {
-    if (matches[card.key]?.cardId) continue;
+    const existing = matches[card.key] || {};
+
+    if (existing.cardId) continue;
+
+    if (
+      existing.unresolved &&
+      existing.matcherVersion === 25 &&
+      !retryUnresolved
+    ) {
+      continue;
+    }
 
     const key = `${fuzzyNorm(card.player)}|${card.year}`;
 

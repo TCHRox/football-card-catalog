@@ -7,15 +7,17 @@ import {
   groupUnmatchedRows,
   fetchCandidateCards,
   matchRowToCandidate,
+  buildSummaryFromCatalogMatch,
   fetchBulkPricing,
   resultMapByCardId,
   buildSummaryFromPricing,
-  sleep
+  resetApiCallStats,
+  getApiCallStats
 } from "./_cardsight-lib.mjs";
 
-const MAX_MATCH_CALLS_PER_RUN = 600;
-const API_DELAY_MS = 275;
+const MAX_MATCH_API_CALLS_PER_RUN = 600;
 const PRICE_BATCH_SIZE = 100;
+const MATCH_STATUS_EVERY_GROUPS = 5;
 
 function authorized(request) {
   const configured = process.env.CARD_CATALOG_ADMIN_PASSWORD || "";
@@ -23,9 +25,23 @@ function authorized(request) {
   return Boolean(configured) && supplied === configured;
 }
 
-function statusCounts(cards, matches, summaries) {
+function counts(cards, matches, summaries) {
   const totalRows = cards.length;
-  const matchedRows = cards.filter(card => matches[card.key]?.cardId).length;
+
+  const matchedRows = cards.filter(card =>
+    Boolean(matches[card.key]?.cardId)
+  ).length;
+
+  const unresolvedRows = cards.filter(card =>
+    matches[card.key]?.unresolved &&
+    matches[card.key]?.matcherVersion === 25
+  ).length;
+
+  const pendingRows = Math.max(
+    0,
+    totalRows - matchedRows - unresolvedRows
+  );
+
   const valuedRows = cards.filter(card =>
     Number.isFinite(Number(summaries[card.key]?.ungraded))
   ).length;
@@ -33,17 +49,29 @@ function statusCounts(cards, matches, summaries) {
   return {
     totalRows,
     matchedRows,
-    valuedRows,
-    unresolvedRows: Math.max(0, totalRows - matchedRows)
+    unresolvedRows,
+    pendingRows,
+    valuedRows
   };
+}
+
+async function saveProgress(store, payload) {
+  await saveStatus(store, {
+    configured: true,
+    running: true,
+    error: "",
+    apiCallsThisRun: getApiCallStats().calls,
+    ...payload
+  });
 }
 
 export default async (request) => {
   if (!authorized(request)) {
-    return;
+    return new Response("Unauthorized", { status: 401 });
   }
 
   const apiKey = process.env.CARDSIGHTAI_API_KEY || "";
+
   const {
     store,
     summaries,
@@ -60,14 +88,16 @@ export default async (request) => {
     return;
   }
 
+  resetApiCallStats();
+
   let cards = [];
 
   try {
     if (!apiKey) {
       await saveStatus(store, {
-        ...oldStatus,
         configured: false,
         running: false,
+        phase: "error",
         error: "CARDSIGHTAI_API_KEY is not configured."
       });
       return;
@@ -75,28 +105,31 @@ export default async (request) => {
 
     cards = await loadSheetCards();
 
-    let counts = statusCounts(cards, matches, summaries);
+    // v24 unresolved records had no matcherVersion. They are intentionally
+    // retried once under the corrected v25 throttling/matcher.
+    const groups = groupUnmatchedRows(cards, matches, {
+      retryUnresolved: false
+    });
 
-    await saveStatus(store, {
-      ...oldStatus,
-      configured: true,
-      running: true,
+    let currentCounts = counts(cards, matches, summaries);
+
+    await saveProgress(store, {
       phase: "matching",
       phaseLabel: "Matching cards to CardSight",
       startedAt,
-      error: "",
-      ...counts
+      matchGroupsTotal: groups.length,
+      matchGroupsProcessed: 0,
+      ...currentCounts
     });
 
-    // Match only groups that still contain unmapped rows. One API call can
-    // resolve many cards for the same player/year.
-    const groups = groupUnmatchedRows(cards, matches);
-    let matchCalls = 0;
+    let groupsProcessed = 0;
 
     for (const group of groups) {
-      if (matchCalls >= MAX_MATCH_CALLS_PER_RUN) break;
+      if (getApiCallStats().calls >= MAX_MATCH_API_CALLS_PER_RUN) {
+        break;
+      }
 
-      let candidates;
+      let candidates = [];
 
       try {
         candidates = await fetchCandidateCards(
@@ -108,70 +141,89 @@ export default async (request) => {
         if ([401, 402, 403, 429].includes(error.status)) {
           throw error;
         }
+
+        // A transient one-off error should leave the group pending, not falsely
+        // label every row as "unmatched."
+        groupsProcessed += 1;
         continue;
       }
-
-      matchCalls += 1;
 
       for (const card of group.cards) {
         const match = matchRowToCandidate(card, candidates);
 
         if (match) {
           matches[card.key] = match;
+
+          summaries[card.key] = buildSummaryFromCatalogMatch(
+            match,
+            summaries[card.key] || {}
+          );
         } else {
           matches[card.key] = {
             unresolved: true,
+            matcherVersion: 25,
             lastTriedAt: Date.now(),
             reason: "No confident CardSight catalog match"
           };
         }
       }
 
-      if (matchCalls % 20 === 0) {
-        await store.setJSON(MATCH_INDEX_KEY, matches);
-        counts = statusCounts(cards, matches, summaries);
+      groupsProcessed += 1;
 
-        await saveStatus(store, {
-          configured: true,
-          running: true,
+      if (
+        groupsProcessed % MATCH_STATUS_EVERY_GROUPS === 0 ||
+        groupsProcessed === groups.length
+      ) {
+        await Promise.all([
+          store.setJSON(MATCH_INDEX_KEY, matches),
+          store.setJSON(MARKET_INDEX_KEY, summaries)
+        ]);
+
+        currentCounts = counts(cards, matches, summaries);
+
+        await saveProgress(store, {
           phase: "matching",
           phaseLabel: "Matching cards to CardSight",
           startedAt,
-          matchCalls,
-          ...counts
+          matchGroupsTotal: groups.length,
+          matchGroupsProcessed: groupsProcessed,
+          ...currentCounts
         });
       }
-
-      await sleep(API_DELAY_MS);
     }
 
-    await store.setJSON(MATCH_INDEX_KEY, matches);
+    await Promise.all([
+      store.setJSON(MATCH_INDEX_KEY, matches),
+      store.setJSON(MARKET_INDEX_KEY, summaries)
+    ]);
 
-    counts = statusCounts(cards, matches, summaries);
+    currentCounts = counts(cards, matches, summaries);
 
-    await saveStatus(store, {
-      configured: true,
-      running: true,
-      phase: "pricing",
-      phaseLabel: "Refreshing market prices",
-      startedAt,
-      matchCalls,
-      ...counts
-    });
+    const matchedCards = cards.filter(card =>
+      Boolean(matches[card.key]?.cardId)
+    );
 
-    // Price unique canonical card IDs in bulk. Rows that are parallels share the
-    // base card call; the returned listing records are then split by parallel ID.
-    const matchedCards = cards.filter(card => matches[card.key]?.cardId);
     const uniqueIds = [...new Set(
       matchedCards.map(card => matches[card.key].cardId)
     )];
 
-    let priceCalls = 0;
+    await saveProgress(store, {
+      phase: "pricing",
+      phaseLabel: "Refreshing market prices",
+      startedAt,
+      matchGroupsTotal: groups.length,
+      matchGroupsProcessed: groupsProcessed,
+      priceIdsTotal: uniqueIds.length,
+      priceIdsProcessed: 0,
+      ...currentCounts
+    });
+
+    let idsProcessed = 0;
 
     for (let i = 0; i < uniqueIds.length; i += PRICE_BATCH_SIZE) {
       const ids = uniqueIds.slice(i, i + PRICE_BATCH_SIZE);
 
-      let results;
+      let results = [];
 
       try {
         results = await fetchBulkPricing(apiKey, ids);
@@ -179,51 +231,53 @@ export default async (request) => {
         if ([401, 402, 403, 429].includes(error.status)) {
           throw error;
         }
-        await sleep(API_DELAY_MS);
+
+        idsProcessed += ids.length;
         continue;
       }
 
-      priceCalls += 1;
       const byId = resultMapByCardId(results);
       const idSet = new Set(ids);
 
       for (const card of matchedCards) {
         const match = matches[card.key];
+
         if (!idSet.has(match.cardId)) continue;
 
         const result = byId.get(match.cardId);
         if (!result) continue;
 
-        summaries[card.key] = buildSummaryFromPricing(result, match);
+        summaries[card.key] = buildSummaryFromPricing(
+          result,
+          match
+        );
       }
+
+      idsProcessed += ids.length;
 
       await store.setJSON(MARKET_INDEX_KEY, summaries);
 
-      if (priceCalls % 5 === 0) {
-        counts = statusCounts(cards, matches, summaries);
+      currentCounts = counts(cards, matches, summaries);
 
-        await saveStatus(store, {
-          configured: true,
-          running: true,
-          phase: "pricing",
-          phaseLabel: "Refreshing market prices",
-          startedAt,
-          matchCalls,
-          priceCalls,
-          priceBatch: Math.min(i + PRICE_BATCH_SIZE, uniqueIds.length),
-          priceTotal: uniqueIds.length,
-          ...counts
-        });
-      }
-
-      await sleep(API_DELAY_MS);
+      await saveProgress(store, {
+        phase: "pricing",
+        phaseLabel: "Refreshing market prices",
+        startedAt,
+        matchGroupsTotal: groups.length,
+        matchGroupsProcessed: groupsProcessed,
+        priceIdsTotal: uniqueIds.length,
+        priceIdsProcessed: idsProcessed,
+        ...currentCounts
+      });
     }
 
-    counts = statusCounts(cards, matches, summaries);
+    currentCounts = counts(cards, matches, summaries);
     const finishedAt = Date.now();
 
-    await store.setJSON(MARKET_INDEX_KEY, summaries);
-    await store.setJSON(MATCH_INDEX_KEY, matches);
+    await Promise.all([
+      store.setJSON(MARKET_INDEX_KEY, summaries),
+      store.setJSON(MATCH_INDEX_KEY, matches)
+    ]);
 
     await saveStatus(store, {
       configured: true,
@@ -233,17 +287,35 @@ export default async (request) => {
       startedAt,
       lastCompletedAt: finishedAt,
       lastPriceRefreshAt: finishedAt,
-      matchCalls,
-      priceCalls,
-      ...counts
+      matchGroupsTotal: groups.length,
+      matchGroupsProcessed: groupsProcessed,
+      priceIdsTotal: uniqueIds.length,
+      priceIdsProcessed: idsProcessed,
+      apiCallsThisRun: getApiCallStats().calls,
+      error: "",
+      ...currentCounts
     });
   } catch (error) {
-    const counts = cards.length
-      ? statusCounts(cards, matches, summaries)
+    const currentCounts = cards.length
+      ? counts(cards, matches, summaries)
       : {};
 
-    await store.setJSON(MARKET_INDEX_KEY, summaries);
-    await store.setJSON(MATCH_INDEX_KEY, matches);
+    await Promise.all([
+      store.setJSON(MARKET_INDEX_KEY, summaries),
+      store.setJSON(MATCH_INDEX_KEY, matches)
+    ]);
+
+    let message = error.message;
+
+    if (error.status === 401) {
+      message = "CardSight rejected CARDSIGHTAI_API_KEY.";
+    } else if (error.status === 402) {
+      message = "CardSight API call allowance has been exhausted for the current plan.";
+    } else if (error.status === 429) {
+      message = "CardSight continued to rate-limit the sync after automatic retries.";
+    } else if (error.status === 403) {
+      message = "CardSight denied this API request. Check the account/API key permissions.";
+    }
 
     await saveStatus(store, {
       configured: Boolean(apiKey),
@@ -251,9 +323,10 @@ export default async (request) => {
       phase: "error",
       phaseLabel: "Market sync stopped",
       startedAt,
-      error: error.message,
+      error: message,
       errorStatus: error.status || 500,
-      ...counts
+      apiCallsThisRun: getApiCallStats().calls,
+      ...currentCounts
     });
   }
 };

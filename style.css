@@ -1114,3 +1114,33 @@ footer {
   opacity: .55;
   cursor: wait;
 }
+
+
+/* v25 explicit CardSight sync progress */
+.market-progress-wrap {
+  width: min(720px, 100%);
+  margin-top: 9px;
+}
+.market-progress-wrap.hidden {
+  display: none;
+}
+.market-progress-track {
+  height: 7px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(255,255,255,.07);
+  border: 1px solid rgba(255,255,255,.055);
+}
+.market-progress-bar {
+  width: 0%;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width .35s ease;
+}
+.market-progress-detail {
+  margin-top: 6px;
+  color: var(--muted);
+  font-size: .7rem;
+  line-height: 1.35;
+}
