@@ -1,265 +1,238 @@
-const SERPER_SEARCH = "https://google.serper.dev/search";
-
-const HEADERS = {
-  "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/151 Safari/537.36",
-  "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-  "Accept-Language": "en-US,en;q=0.9"
-};
+const SALES_URL = "https://thecardapi.com/api/v1/market/sales";
 
 function json(body, status = 200, cacheSeconds = 0) {
   const headers = { "content-type": "application/json; charset=utf-8" };
+
   if (cacheSeconds > 0) {
     headers["Cache-Control"] = `public, max-age=${cacheSeconds}`;
     headers["Netlify-CDN-Cache-Control"] = `public, durable, max-age=${cacheSeconds}`;
   } else {
     headers["Cache-Control"] = "no-store";
   }
+
   return new Response(JSON.stringify(body), { status, headers });
 }
 
-function decodeHtml(value) {
-  return String(value || "")
-    .replace(/&nbsp;/gi, " ")
-    .replace(/&amp;/gi, "&")
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&#x27;/gi, "'")
-    .replace(/&lt;/gi, "<")
-    .replace(/&gt;/gi, ">")
-    .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)));
-}
-
-function stripTags(html) {
-  return decodeHtml(
-    String(html || "")
-      .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
-      .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ")
-      .replace(/<br\s*\/?>/gi, "\n")
-      .replace(/<\/(?:p|div|tr|td|th|li|h\d)>/gi, "\n")
-      .replace(/<[^>]+>/g, " ")
-  )
-    .replace(/[ \t]+/g, " ")
-    .replace(/\n\s+/g, "\n")
-    .replace(/\n{2,}/g, "\n")
-    .trim();
-}
-
-function norm(value) {
-  return String(value || "")
+function normalize(value) {
+  return String(value ?? "")
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .replace(/[’']/g, "")
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, " ")
-    .trim();
-}
-
-function safeSearchText(value) {
-  return String(value || "")
-    .normalize("NFKD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .replace(/["'`:#()+\[\]{}<>|\\/]/g, " ")
-    .replace(/[–—_-]+/g, " ")
     .replace(/\s+/g, " ")
     .trim();
 }
 
-function searchQuery(card) {
+function tokens(value) {
+  return normalize(value).split(/\s+/).filter(Boolean);
+}
+
+function escapePhrase(value) {
+  return String(value || "")
+    .replace(/["\\]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function normalizedBrand(brand) {
+  return normalize(brand)
+    .replace(/\bdonruss optics\b/g, "donruss optic")
+    .replace(/\bpanini\b/g, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function buildQuery(card) {
+  const player = escapePhrase(card.player);
+  const brand = escapePhrase(card.brand);
+  const type = escapePhrase(card.type);
+  const number = escapePhrase(card.number);
+
+  // Exact player phrase plus identifying card terms. Exclude common bulk/reprint
+  // false positives while keeping the query understandable to the sales API.
   return [
-    safeSearchText(card.player),
-    safeSearchText(card.year),
-    safeSearchText(card.brand),
-    safeSearchText(card.type),
-    safeSearchText(card.number),
-    safeSearchText(card.notes),
-    "SportsCardsPro football"
+    player ? `"${player}"` : "",
+    card.year,
+    brand,
+    type && !/^parallel$/i.test(type) ? type : "",
+    number,
+    "-(lot,break,set,reprint,digital)"
   ].filter(Boolean).join(" ");
 }
 
-function scoreResult(result, card) {
-  const link = String(result.link || "");
-  const title = String(result.title || "");
-  const text = norm(`${title} ${link}`);
+function cardTitleScore(sale, card) {
+  const title = normalize(sale.title || "");
+  const structuredPlayer = normalize(sale.player || "");
+  const structuredNumber = normalize(sale.card_number || "");
+  const structuredYear = String(sale.year || "");
+  const structuredSet = normalize(sale.card_set || "");
+  const manufacturer = normalize(sale.manufacturer || "");
 
-  let score = /sportscardspro\.com\/game\/football-cards/i.test(link) ? 50 : -100;
+  const playerTokens = tokens(card.player);
+  const brandTokens = tokens(normalizedBrand(card.brand));
+  const typeTokens = tokens(card.type).filter(t => !["base", "parallel", "subset"].includes(t));
+  const notesTokens = tokens(card.notes).filter(t => t.length >= 3).slice(0, 5);
+  const number = normalize(card.number);
+  const year = String(card.year || "");
 
-  const playerTokens = norm(card.player).split(/\s+/).filter(Boolean);
-  if (playerTokens.every(t => text.includes(t))) score += 25;
+  let score = 0;
 
-  if (card.year && text.includes(norm(card.year))) score += 12;
+  const playerMatches = playerTokens.length &&
+    playerTokens.every(t => title.includes(t) || structuredPlayer.includes(t));
+  if (!playerMatches) return -100;
+  score += 35;
 
-  const brandTokens = norm(card.brand)
-    .replace(/donruss optics?/g, "donruss optic")
-    .split(/\s+/)
-    .filter(Boolean);
+  if (year && (title.includes(year) || structuredYear === year || structuredSet.includes(year))) {
+    score += 15;
+  } else if (year) {
+    score -= 22;
+  }
 
-  if (brandTokens.some(t => text.includes(t))) score += 10;
+  if (number) {
+    const numberMatch =
+      structuredNumber === number ||
+      title.includes(` ${number} `) ||
+      title.endsWith(` ${number}`) ||
+      title.includes(` ${number} psa`) ||
+      title.includes(` ${number} bgs`) ||
+      title.includes(` ${number} sgc`) ||
+      title.includes(` ${number} cgc`);
 
-  const number = norm(card.number);
-  if (number && text.includes(number)) score += 18;
+    if (numberMatch) score += 28;
+    else score -= 25;
+  }
 
-  const notes = norm(card.notes);
-  if (notes && notes.split(/\s+/).some(t => t.length > 2 && text.includes(t))) score += 6;
+  if (brandTokens.length) {
+    const brandMatches = brandTokens.some(t =>
+      title.includes(t) || structuredSet.includes(t) || manufacturer.includes(t)
+    );
+    if (brandMatches) score += 13;
+    else score -= 12;
+  }
+
+  if (typeTokens.length && typeTokens.some(t => title.includes(t))) score += 5;
+  if (notesTokens.length && notesTokens.some(t => title.includes(t))) score += 7;
+
+  if (String(card.rookie).toUpperCase() === "Y" && /\b(rc|rookie)\b/i.test(sale.title || "")) {
+    score += 3;
+  }
+
+  if (/\b(lot|you pick|pick your|reprint|digital|custom)\b/i.test(sale.title || "")) {
+    score -= 35;
+  }
 
   return score;
 }
 
-async function locatePage(apiKey, card) {
-  if (card.preferredUrl && /sportscardspro\.com\/game\/football-cards/i.test(card.preferredUrl)) {
-    return card.preferredUrl;
+function median(values) {
+  const nums = values
+    .map(Number)
+    .filter(Number.isFinite)
+    .sort((a,b) => a-b);
+
+  if (!nums.length) return null;
+  const mid = Math.floor(nums.length / 2);
+  return nums.length % 2
+    ? nums[mid]
+    : (nums[mid - 1] + nums[mid]) / 2;
+}
+
+function average(values) {
+  const nums = values.map(Number).filter(Number.isFinite);
+  if (!nums.length) return null;
+  return nums.reduce((a,b) => a+b, 0) / nums.length;
+}
+
+function gradeLabel(sale) {
+  const grader = String(sale.grader || "").trim().toUpperCase();
+  const grade = String(sale.grade || "").trim();
+
+  if (grader && grade) return `${grader} ${grade}`;
+
+  // Treat explicit absence of professional grading as raw.
+  if (!grader && !grade) return "Ungraded";
+
+  return [grader, grade].filter(Boolean).join(" ");
+}
+
+function priceGroups(sales) {
+  const groups = new Map();
+
+  for (const sale of sales) {
+    const label = gradeLabel(sale);
+    if (!groups.has(label)) groups.set(label, []);
+    groups.get(label).push(Number(sale.price));
   }
 
-  if (!apiKey) return "";
-
-  const response = await fetch(SERPER_SEARCH, {
-    method: "POST",
-    headers: {
-      "X-API-KEY": apiKey,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      q: searchQuery(card),
-      gl: "us",
-      hl: "en",
-      num: 10
-    })
-  });
-
-  if (!response.ok) return "";
-
-  const data = await response.json();
-  const candidates = (data.organic || [])
-    .filter(item => /sportscardspro\.com\/game\/football-cards/i.test(item.link || ""))
-    .map(item => ({ ...item, score: scoreResult(item, card) }))
-    .sort((a,b) => b.score - a.score);
-
-  return candidates[0]?.score >= 70 ? candidates[0].link : "";
-}
-
-function parsePrice(value) {
-  const n = Number(String(value || "").replace(/[$,\s]/g, ""));
-  return Number.isFinite(n) ? n : null;
-}
-
-function parsePriceGuide(html) {
-  const text = stripTags(html);
-  const start = text.toLowerCase().lastIndexOf("full price guide:");
-  const section = start >= 0 ? text.slice(start, start + 6000) : text;
-
-  const labels = [
-    "Ungraded",
-    "Grade 1",
-    "Grade 2",
-    "Grade 3",
-    "Grade 4",
-    "Grade 5",
-    "Grade 6",
-    "Grade 7",
-    "Grade 8",
-    "Grade 9",
-    "Grade 9.5",
-    "TAG 10",
-    "ACE 10",
-    "SGC 10",
-    "CGC 10",
-    "PSA 10",
-    "BGS 10",
-    "BGS 10 Black",
-    "CGC 10 Pristine"
-  ];
-
-  const prices = [];
-
-  for (const label of labels) {
-    const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-    const match = section.match(new RegExp(`${escaped}\\s+(\\$[0-9,.]+|-)`, "i"));
-
-    if (!match) continue;
-
-    prices.push({
+  return [...groups.entries()]
+    .map(([label, prices]) => ({
       label,
-      value: match[1] === "-" ? null : parsePrice(match[1])
+      value: median(prices),
+      average: average(prices),
+      sales: prices.length
+    }))
+    .filter(item => item.value !== null)
+    .sort((a,b) => {
+      if (a.label === "Ungraded") return -1;
+      if (b.label === "Ungraded") return 1;
+      return b.value - a.value;
     });
-  }
-
-  return prices;
 }
 
-function stripAnchorText(value) {
-  return stripTags(value).replace(/\s+/g, " ").trim();
-}
-
-function parseSales(html) {
-  const anchors = [];
-  const anchorPattern = /<a\b[^>]*href=["']([^"']+)["'][^>]*>([\s\S]*?)<\/a>/gi;
-  let match;
-
-  while ((match = anchorPattern.exec(html))) {
-    const href = decodeHtml(match[1]);
-    if (!/(?:ebay\.com|ebaypartnernetwork|rover\.ebay)/i.test(href)) continue;
-
-    const title = stripAnchorText(match[2]);
-    if (!title || /subscribe|buy\/sell|ebay deal/i.test(title)) continue;
-
-    anchors.push({
-      href,
-      title,
-      start: match.index,
-      end: anchorPattern.lastIndex
-    });
-  }
-
-  const sales = [];
-  const seen = new Set();
-
-  for (const anchor of anchors) {
-    const before = stripTags(html.slice(Math.max(0, anchor.start - 1100), anchor.start));
-    const after = stripTags(html.slice(anchor.end, Math.min(html.length, anchor.end + 450)));
-
-    const dates = [...before.matchAll(/\b(20\d{2}-\d{2}-\d{2})\b/g)];
-    const date = dates.length ? dates[dates.length - 1][1] : "";
-
-    const priceMatch = after.match(/\$([0-9][0-9,.]*)/);
-    const numericPrice = priceMatch ? parsePrice(priceMatch[0]) : null;
-
-    if (!date || numericPrice === null) continue;
-
-    const key = `${date}|${anchor.title}|${numericPrice}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-
-    sales.push({
-      date,
-      title: anchor.title,
-      price: priceMatch[0],
-      numericPrice,
-      url: anchor.href
-    });
-  }
-
-  return sales
-    .sort((a,b) => Date.parse(b.date) - Date.parse(a.date))
-    .slice(0, 30);
-}
-
-async function fetchSportsCardsPro(url) {
-  const response = await fetch(url, {
-    headers: HEADERS,
-    redirect: "follow"
+async function fetchSales(apiKey, card) {
+  const params = new URLSearchParams({
+    q: buildQuery(card),
+    category: "sports",
+    limit: "250",
+    sort: "date_desc"
   });
+
+  const response = await fetch(`${SALES_URL}?${params.toString()}`, {
+    headers: {
+      "x-market-api-key": apiKey,
+      "Accept": "application/json"
+    }
+  });
+
+  const text = await response.text();
+  let payload = {};
+
+  try {
+    payload = JSON.parse(text);
+  } catch {
+    payload = {};
+  }
 
   if (!response.ok) {
-    throw new Error(`SportsCardsPro returned HTTP ${response.status}.`);
+    const message = payload.detail || payload.error || payload.message ||
+      `The Card API returned HTTP ${response.status}.`;
+    const err = new Error(String(message));
+    err.status = response.status;
+    throw err;
   }
 
   return {
-    html: await response.text(),
-    finalUrl: response.url || url
+    payload,
+    rateLimitRemaining: response.headers.get("x-ratelimit-remaining"),
+    rateLimitLimit: response.headers.get("x-ratelimit-limit")
   };
 }
 
 export default async (request) => {
   try {
+    const apiKey = process.env.THE_CARD_API_KEY || "";
+
+    if (!apiKey) {
+      return json({
+        found: false,
+        code: "THE_CARD_API_NOT_CONFIGURED",
+        message: "THE_CARD_API_KEY is not configured in Netlify."
+      }, 503);
+    }
+
     const url = new URL(request.url);
+
     const card = {
       player: url.searchParams.get("player") || "",
       year: url.searchParams.get("year") || "",
@@ -267,48 +240,111 @@ export default async (request) => {
       type: url.searchParams.get("type") || "",
       number: url.searchParams.get("number") || "",
       rookie: url.searchParams.get("rookie") || "",
-      notes: url.searchParams.get("notes") || "",
-      preferredUrl: url.searchParams.get("preferredUrl") || ""
+      notes: url.searchParams.get("notes") || ""
     };
 
     if (!card.player || !card.year || !card.brand || !card.number) {
       return json({
         found: false,
-        error: "Not enough identifying card data for market lookup."
-      }, 400);
+        message: "Not enough card information is available for market lookup."
+      }, 200, 1800);
     }
 
-    const sourceUrl = await locatePage(process.env.SERPER_API_KEY || "", card);
+    const { payload, rateLimitRemaining, rateLimitLimit } =
+      await fetchSales(apiKey, card);
 
-    if (!sourceUrl) {
+    const rawSales = Array.isArray(payload.data) ? payload.data : [];
+
+    const matched = rawSales
+      .map(sale => ({
+        sale,
+        score: cardTitleScore(sale, card)
+      }))
+      .filter(item => item.score >= 55)
+      .sort((a,b) => {
+        const dateDiff = Date.parse(b.sale.sale_date || "") -
+          Date.parse(a.sale.sale_date || "");
+        return dateDiff || b.score - a.score;
+      })
+      .map(item => item.sale);
+
+    if (!matched.length) {
       return json({
         found: false,
-        message: "No reliable SportsCardsPro page matched this card."
-      }, 200, 21600);
+        message: "No trustworthy completed-sale matches were found in the API's current lookback window.",
+        coverageDateFrom: payload.meta?.coverage_date_from || "",
+        coverageDateTo: payload.meta?.coverage_date_to || "",
+        rateLimitRemaining,
+        rateLimitLimit
+      }, 200, 1800);
     }
 
-    const page = await fetchSportsCardsPro(sourceUrl);
-    const prices = parsePriceGuide(page.html);
-    const sales = parseSales(page.html);
+    const sales = matched.slice(0, 40).map(sale => ({
+      date: sale.sale_date || "",
+      title: sale.title || "",
+      numericPrice: Number(sale.price),
+      price: sale.price,
+      url: sale.listing_url || "",
+      platform: sale.platform || "",
+      listingType: sale.listing_type || "",
+      grader: sale.grader || "",
+      grade: sale.grade || "",
+      gradeLabel: gradeLabel(sale),
+      imageUrl: sale.thumbnail_url || sale.image_url || ""
+    }));
 
-    if (!prices.length && !sales.length) {
-      return json({
-        found: false,
-        sourceUrl: page.finalUrl,
-        message: "SportsCardsPro matched the card, but its market data could not be read."
-      }, 200, 3600);
-    }
+    const prices = priceGroups(matched);
+
+    const rawMatched = matched.filter(sale => gradeLabel(sale) === "Ungraded");
+    const chartSales = (rawMatched.length >= 2 ? rawMatched : matched)
+      .slice(0, 40)
+      .map(sale => ({
+        date: sale.sale_date || "",
+        title: sale.title || "",
+        numericPrice: Number(sale.price),
+        price: sale.price,
+        url: sale.listing_url || "",
+        gradeLabel: gradeLabel(sale)
+      }));
 
     return json({
       found: true,
-      source: "SportsCardsPro",
-      sourceUrl: page.finalUrl,
+      source: "The Card API",
       prices,
       sales,
+      chartSales,
+      totalMatched: matched.length,
+      overallMedian: median(matched.map(s => s.price)),
+      coverageDateFrom: payload.meta?.coverage_date_from || "",
+      coverageDateTo: payload.meta?.coverage_date_to || "",
+      chartLabel: rawMatched.length >= 2
+        ? "Recent ungraded sold prices"
+        : "Recent matched sold prices",
+      planNote: payload.meta?.coverage_date_from && payload.meta?.coverage_date_to
+        ? "Coverage is determined by your The Card API plan."
+        : "",
+      rateLimitRemaining,
+      rateLimitLimit,
       fetchedAt: new Date().toISOString()
-    }, 200, 21600);
+    }, 200, 1800);
 
   } catch (error) {
+    if (error.status === 401) {
+      return json({
+        found: false,
+        code: "THE_CARD_API_INVALID_KEY",
+        message: "The Card API rejected THE_CARD_API_KEY."
+      }, 401);
+    }
+
+    if (error.status === 429) {
+      return json({
+        found: false,
+        code: "THE_CARD_API_LIMIT",
+        message: "The Card API daily sales allowance has been reached. It resets at 00:00 UTC."
+      }, 429);
+    }
+
     return json({
       found: false,
       error: error.message

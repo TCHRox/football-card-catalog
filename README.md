@@ -297,3 +297,41 @@ opening the same card repeatedly does not continuously request the source site.
 Some obscure cards, parallels, or differently named sets may not match
 automatically. In those cases the detail modal remains usable and clearly says
 that no reliable market match was found.
+
+
+## v17 — market data source changed to The Card API
+
+SportsCardsPro's public pages return HTTP 403 to Netlify server-side requests,
+so v17 no longer attempts to scrape SportsCardsPro.
+
+The market dashboard now uses The Card API's developer endpoint for actual
+completed sales.
+
+### One-time setup
+
+1. Get a free API key from https://www.thecardapi.com/
+2. In Netlify -> Site configuration -> Environment variables, add:
+
+   `THE_CARD_API_KEY`
+
+3. Paste the key as the value.
+4. If Netlify shows scopes, make sure Functions can access it.
+5. Trigger a new deploy.
+
+Do not put the API key into GitHub or app.js.
+
+### What v17 derives from completed sales
+
+- Recent sold-price chart
+- Recent median ungraded value when raw sales exist
+- Median values by grader/grade from available matched sales
+- Recent listing date, title, sale price, platform and listing URL
+- Exact coverage window reported by the API
+
+The free The Card API plan currently provides a 3-day lookback and 5,000
+sales records per day. Paid plans automatically expand the lookback without
+requiring code changes.
+
+Because some older/obscure cards may have no sale during a short window,
+the modal can legitimately show "No reliable recent sales found." This is
+different from the SportsCardsPro HTTP 403 failure.

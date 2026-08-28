@@ -858,3 +858,40 @@ footer {
   }
   .sale-arrow { display: none; }
 }
+
+
+/* v17 market API notes */
+.market-coverage-note {
+  margin-top: -10px;
+  color: var(--muted);
+  font-size: .74rem;
+}
+.market-coverage-note strong {
+  color: var(--text);
+}
+.grade-price-card small {
+  display: block;
+  margin-top: 4px;
+  color: var(--muted);
+  font-size: .65rem;
+}
+.sale-title em {
+  display: inline-block;
+  margin-left: 7px;
+  color: var(--accent);
+  font-style: normal;
+  font-size: .68rem;
+  font-weight: 700;
+}
+.market-setup-help {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: rgba(255,255,255,.035);
+  color: var(--muted);
+  font-size: .8rem;
+}
+.market-setup-help code {
+  color: var(--accent);
+}

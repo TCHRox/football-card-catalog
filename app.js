@@ -1078,14 +1078,8 @@ function marketMoney(value) {
   }).format(n);
 }
 
-function marketSourceFor(row) {
-  const data = imageDataFor(row);
-  const page = data?.sourcePage || "";
-  return /sportscardspro\.com\/game\/football-cards/i.test(page) ? page : "";
-}
-
 function marketQuery(row) {
-  const params = new URLSearchParams({
+  return new URLSearchParams({
     player: fullName(row),
     year: field(row, "year"),
     brand: brandFor(row),
@@ -1094,11 +1088,6 @@ function marketQuery(row) {
     rookie: isRookie(row) ? "Y" : "N",
     notes: field(row, "notes")
   });
-
-  const preferredUrl = marketSourceFor(row);
-  if (preferredUrl) params.set("preferredUrl", preferredUrl);
-
-  return params;
 }
 
 function renderMarketLoading() {
@@ -1198,52 +1187,74 @@ function chartSvg(sales) {
 function preferredGradeCards(prices) {
   const order = [
     "Ungraded",
-    "Grade 8",
-    "Grade 9",
-    "Grade 9.5",
-    "SGC 10",
-    "CGC 10",
-    "PSA 10",
-    "BGS 10"
+    "PSA 10", "PSA 9", "PSA 8",
+    "BGS 10", "BGS 9.5", "BGS 9",
+    "SGC 10", "SGC 9.5", "SGC 9",
+    "CGC 10", "CGC 9.5", "CGC 9"
   ];
 
   const byLabel = new Map((prices || []).map(p => [p.label, p]));
-  return order
-    .map(label => byLabel.get(label))
-    .filter(Boolean)
-    .slice(0, 8);
+  const ordered = order.map(label => byLabel.get(label)).filter(Boolean);
+
+  // Append other available grades after the common ones.
+  for (const item of prices || []) {
+    if (!ordered.some(existing => existing.label === item.label)) {
+      ordered.push(item);
+    }
+  }
+
+  return ordered.slice(0, 8);
 }
 
 function renderMarketData(data) {
   if (!data || !data.found) {
+    const setupHelp = data?.code === "THE_CARD_API_NOT_CONFIGURED"
+      ? `
+        <div class="market-setup-help">
+          Add <code>THE_CARD_API_KEY</code> to Netlify Environment Variables,
+          make sure Functions can access it, then redeploy.
+        </div>`
+      : "";
+
     return `
       <section class="market-panel market-unavailable">
         <div class="section-kicker">MARKET DATA</div>
-        <h3>No reliable SportsCardsPro match found</h3>
-        <p>${escapeHtml(data?.message || "This card may be too obscure, the set name may differ, or SportsCardsPro may not track it yet.")}</p>
+        <h3>${data?.code === "THE_CARD_API_NOT_CONFIGURED" ? "Market API needs setup" : "No reliable recent sales found"}</h3>
+        <p>${escapeHtml(data?.message || data?.error || "No matching completed sales were available in the current API lookback window.")}</p>
+        ${setupHelp}
       </section>`;
   }
 
   const raw = (data.prices || []).find(p => p.label === "Ungraded");
   const recent = data.sales || [];
+  const chartSales = data.chartSales || recent;
   const gradeCards = preferredGradeCards(data.prices);
 
   const avg = recent.length
     ? recent.reduce((sum,s) => sum + Number(s.numericPrice || 0), 0) / recent.length
     : null;
 
+  const marketValue = raw?.value ?? data.overallMedian ?? null;
+  const marketLabel = raw?.value !== null && raw?.value !== undefined
+    ? "Ungraded median"
+    : "Median matched sale";
+
+  const coverage = data.coverageDateFrom && data.coverageDateTo
+    ? `${data.coverageDateFrom} – ${data.coverageDateTo}`
+    : (data.lookbackLabel || "Current plan window");
+
   return `
     <section class="market-panel">
       <div class="market-summary-row">
         <div>
           <div class="section-kicker">MARKET VALUE</div>
-          <div class="market-primary-value">${marketMoney(raw?.value)}</div>
-          <div class="market-small-label">Ungraded estimate</div>
+          <div class="market-primary-value">${marketMoney(marketValue)}</div>
+          <div class="market-small-label">${escapeHtml(marketLabel)}</div>
         </div>
 
         <div class="market-mini-stat">
-          <span>Recent sales</span>
-          <strong>${recent.length || "—"}</strong>
+          <span>Matched sales</span>
+          <strong>${data.totalMatched || recent.length || "—"}</strong>
         </div>
 
         <div class="market-mini-stat">
@@ -1251,63 +1262,76 @@ function renderMarketData(data) {
           <strong>${marketMoney(avg)}</strong>
         </div>
 
-        <a class="source-link" href="${escapeHtml(data.sourceUrl)}" target="_blank" rel="noopener">
-          SportsCardsPro ↗
+        <a class="source-link" href="https://www.thecardapi.com/" target="_blank" rel="noopener">
+          The Card API ↗
         </a>
+      </div>
+
+      <div class="market-coverage-note">
+        Sales coverage shown: <strong>${escapeHtml(coverage)}</strong>.
+        ${data.planNote ? escapeHtml(data.planNote) : ""}
       </div>
 
       <div class="market-chart-card">
         <div class="market-section-heading">
           <div>
             <div class="section-kicker">SALES HISTORY</div>
-            <h3>Recent sold prices</h3>
+            <h3>${data.chartLabel ? escapeHtml(data.chartLabel) : "Recent sold prices"}</h3>
           </div>
-          <span>${recent.length ? `${recent.length} sales` : "No recent sales"}</span>
+          <span>${recent.length ? `${recent.length} matched sales` : "No recent sales"}</span>
         </div>
-        ${chartSvg(recent)}
+        ${chartSvg(chartSales)}
       </div>
 
       <div class="grade-section">
         <div class="market-section-heading">
           <div>
-            <div class="section-kicker">PRICE GUIDE</div>
-            <h3>Values by grade</h3>
+            <div class="section-kicker">PRICE BY CONDITION</div>
+            <h3>Recent median values</h3>
           </div>
         </div>
-        <div class="grade-price-grid">
-          ${gradeCards.map(item => `
-            <div class="grade-price-card">
-              <span>${escapeHtml(item.label)}</span>
-              <strong>${marketMoney(item.value)}</strong>
-            </div>`).join("")}
-        </div>
+        ${gradeCards.length ? `
+          <div class="grade-price-grid">
+            ${gradeCards.map(item => `
+              <div class="grade-price-card">
+                <span>${escapeHtml(item.label)}</span>
+                <strong>${marketMoney(item.value)}</strong>
+                <small>${item.sales} sale${item.sales === 1 ? "" : "s"}</small>
+              </div>`).join("")}
+          </div>` : `
+          <div class="market-empty-copy">No grade-specific sales were found in the current lookback window.</div>
+        `}
       </div>
 
       <div class="recent-sales-section">
         <div class="market-section-heading">
           <div>
             <div class="section-kicker">RECENT SALES</div>
-            <h3>Sold listings</h3>
+            <h3>Completed listings</h3>
           </div>
         </div>
 
         ${recent.length ? `
           <div class="sales-list">
-            ${recent.slice(0, 8).map(sale => `
-              <a class="sale-row" href="${escapeHtml(sale.url || data.sourceUrl)}" target="_blank" rel="noopener">
+            ${recent.slice(0, 10).map(sale => `
+              <a class="sale-row" href="${escapeHtml(sale.url || "#")}" target="_blank" rel="noopener">
                 <span class="sale-date">${escapeHtml(sale.date || "")}</span>
-                <span class="sale-title">${escapeHtml(sale.title || "Completed sale")}</span>
+                <span class="sale-title">
+                  ${escapeHtml(sale.title || "Completed sale")}
+                  ${sale.gradeLabel ? `<em>${escapeHtml(sale.gradeLabel)}</em>` : ""}
+                </span>
                 <strong class="sale-price">${marketMoney(sale.numericPrice)}</strong>
                 <span class="sale-arrow">↗</span>
               </a>`).join("")}
           </div>` : `
-          <div class="market-empty-copy">SportsCardsPro has a price estimate for this card, but no recent sold listings were available to display.</div>
+          <div class="market-empty-copy">No recent matching completed listings were available.</div>
         `}
       </div>
 
       <div class="market-source-note">
-        Market estimates and sold-listing history sourced from
-        <a href="${escapeHtml(data.sourceUrl)}" target="_blank" rel="noopener">SportsCardsPro</a>.
+        Completed-sale data sourced from
+        <a href="https://www.thecardapi.com/" target="_blank" rel="noopener">The Card API</a>.
+        Prices are calculated from matched sales in your API plan's available lookback window.
       </div>
     </section>`;
 }
