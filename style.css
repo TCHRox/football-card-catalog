@@ -1107,3 +1107,10 @@ footer {
     grid-template-columns: 40px minmax(52px, auto) 1fr;
   }
 }
+
+
+/* v24 persistent CardSight market database */
+#market-sync-btn:disabled {
+  opacity: .55;
+  cursor: wait;
+}

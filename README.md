@@ -573,3 +573,105 @@ Keep:
 - `PARSE_API_KEY`
 
 No additional API setup is required for v23.
+
+
+## v24 — persistent CardSight collection pricing
+
+v24 changes market values from browser-time lookups into a persistent,
+collection-wide pricing database.
+
+### What is new
+
+- All matched catalog rows can have stored market values.
+- Market values are saved in Netlify Blobs and are shared across every device.
+- The catalog displays:
+  - Raw / ungraded
+  - PSA 9
+  - PSA 10
+- One-year percentage changes are stored when enough sales history exists.
+- `Value: High → Low` and `Value: Low → High` sort the ENTIRE filtered
+  collection by the stored raw market value before pagination.
+- Collection Value uses Raw market value × quantity for every valued card.
+- New **Sync Market** button starts a background sync.
+- A market status indicator shows matched, valued, and unresolved counts.
+- New Sheet rows are discovered and matched on later syncs automatically.
+
+### CardSight matching
+
+Initial matching is persistent. The function groups unmatched rows by
+player + year and queries the CardSight catalog once for the group where
+possible. Each Sheet row is then validated against:
+
+- player
+- year
+- exact card number
+- brand / release / set
+- parallel name from Notes when applicable
+
+Ambiguous parallels are deliberately left unresolved instead of assigning the
+wrong value.
+
+### Pricing refresh
+
+CardSight's bulk pricing endpoint accepts up to 100 card IDs per call.
+
+The sync:
+1. loads existing permanent CardSight matches;
+2. matches only new/unresolved collection rows;
+3. sends matched canonical card IDs to bulk pricing in groups of 100;
+4. computes current values from recent completed pricing records;
+5. saves values and one-year changes into Netlify Blobs.
+
+Raw values use the median of the most recent 90 days of records when possible,
+falling back to the available one-year window.
+
+### Automatic schedule
+
+A scheduled Netlify Function runs once per day, but the default refresh
+interval is **7 days**.
+
+The daily scheduler checks the most recent successful refresh and only starts
+CardSight when the stored market data is at least seven days old.
+
+Optional Netlify variable:
+
+`CARDSIGHT_REFRESH_DAYS`
+
+- omit it -> weekly (7 days)
+- `7` -> weekly
+- `1` -> daily
+
+This lets the frequency change without another code release.
+
+### Required new Netlify variable
+
+`CARDSIGHTAI_API_KEY`
+
+Get the free key from CardSight AI and make it available to Netlify Functions.
+
+### Variables to keep
+
+- `SERPER_API_KEY` — automatic image lookup
+- `CARD_CATALOG_ADMIN_PASSWORD` — permanent image changes and manual market sync
+- `PARSE_API_KEY` — current SportsCardsPro detail-window history
+- `CARDSIGHTAI_API_KEY` — collection-wide persistent values
+
+`THE_CARD_API_KEY` remains unused and can stay deleted.
+
+### Free-plan call considerations
+
+CardSight currently includes 750 calls/month on the free tier.
+
+Once every Sheet row is matched, a full pricing refresh requires roughly one
+bulk call per 100 unique canonical card IDs. 6,324 catalog rows therefore have
+a theoretical maximum of about 64 bulk pricing calls per refresh, and usually
+fewer when multiple entries are variants of the same canonical card.
+
+Weekly recurring pricing should therefore fit comfortably within 750 calls.
+
+The initial one-time matching stage also consumes API calls. v24 groups rows by
+player + year so one catalog call can match multiple cards, and caps new match
+searches at 600 during one background run. If the collection has more unique
+player/year groups than the free allowance can cover in the first month, the
+sync will preserve all progress and can resume later. A one-month CardSight Pro
+upgrade is the fastest option if the initial mapping exhausts the free quota.

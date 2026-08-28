@@ -6,13 +6,14 @@ const CONFIG = {
   customImageEndpoint: "/.netlify/functions/custom-card-image",
   marketEndpoint: "/.netlify/functions/card-market",
   marketSalesEndpoint: "/.netlify/functions/card-market-sales",
-  marketGridEndpoint: "/.netlify/functions/card-market-grid",
+  marketIndexEndpoint: "/.netlify/functions/cardsight-market-index",
+  marketSyncEndpoint: "/.netlify/functions/cardsight-sync-background",
   imageCacheStorageKey: "football-card-archive-image-cache-v5",
   imageBatchSize: 8,
   imageBatchConcurrency: 2,
   initialImageLookahead: 48,
   defaultPageSize: 250,
-  marketGridRefreshMs: 20000
+  marketPollMs: 8000
 };
 
 const ALIASES = {
@@ -74,9 +75,8 @@ let customEditorOpen = false;
 const marketDataCache = new Map();
 const marketGradeByCard = new Map();
 let marketGridSummaries = {};
-let marketGridTimer = null;
-let marketGridRequestToken = 0;
-let marketGridRemainingGroups = 0;
+let marketSyncStatus = {};
+let marketPollTimer = null;
 
 const $ = (id) => document.getElementById(id);
 const norm = (s) => String(s ?? "")
@@ -449,7 +449,30 @@ function filteredRows() {
       filtered.sort((a,b) => Number(field(a,"year")) - Number(field(b,"year")));
       break;
     case "value-desc":
-      filtered.sort((a,b) => moneyNumber(field(b,"value")) - moneyNumber(field(a,"value")));
+      filtered.sort((a,b) => {
+        const av = Number(marketGridSummaries[cardKey(a)]?.ungraded);
+        const bv = Number(marketGridSummaries[cardKey(b)]?.ungraded);
+        const aValid = Number.isFinite(av);
+        const bValid = Number.isFinite(bv);
+
+        if (aValid && bValid) return bv - av;
+        if (bValid) return 1;
+        if (aValid) return -1;
+        return 0;
+      });
+      break;
+    case "value-asc":
+      filtered.sort((a,b) => {
+        const av = Number(marketGridSummaries[cardKey(a)]?.ungraded);
+        const bv = Number(marketGridSummaries[cardKey(b)]?.ungraded);
+        const aValid = Number.isFinite(av);
+        const bValid = Number.isFinite(bv);
+
+        if (aValid && bValid) return av - bv;
+        if (bValid) return 1;
+        if (aValid) return -1;
+        return 0;
+      });
       break;
   }
 
@@ -540,7 +563,7 @@ function gridMarketHtml(summary) {
     <div class="card-market-heading">Market value</div>
     <div class="card-market-values">
       ${row("Raw", data.ungraded, changes.ungraded)}
-      ${row("G9", data.grade9, changes.grade9)}
+      ${row("PSA 9", data.psa9 ?? data.grade9, changes.psa9 ?? changes.grade9)}
       ${row("PSA 10", data.psa10, changes.psa10)}
     </div>`;
 }
@@ -552,85 +575,168 @@ function applyGridMarketSummaries() {
   });
 }
 
-function gridMarketCardPayload(row) {
-  return {
-    key: cardKey(row),
-    player: fullName(row),
-    year: field(row, "year"),
-    brand: brandFor(row),
-    type: cardTypeFor(row),
-    number: field(row, "cardNumber"),
-    rookie: isRookie(row) ? "Y" : "N",
-    notes: field(row, "notes")
-  };
+function setMarketProviderStatus(state, detail = "") {
+  const pill = $("market-sync-pill");
+  const text = $("market-sync-text");
+  const line = $("market-status-line");
+
+  if (!pill || !text || !line) return;
+
+  pill.classList.remove("online", "error", "searching");
+
+  if (state === "connected") {
+    pill.classList.add("online");
+    text.textContent = "Market ready";
+  } else if (state === "searching") {
+    pill.classList.add("searching");
+    text.textContent = "Market syncing";
+  } else if (state === "error") {
+    pill.classList.add("error");
+    text.textContent = "Market offline";
+  } else {
+    text.textContent = "Market checking";
+  }
+
+  if (detail) line.textContent = detail;
 }
 
-function currentMarketGridSignature() {
-  return currentPageRows.map(row => cardKey(row)).join("||");
+function marketDateLabel(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return date.toLocaleString();
 }
 
-function scheduleGridMarketLookup(delay = 150) {
-  if (marketGridTimer) clearTimeout(marketGridTimer);
+function renderMarketSyncStatus() {
+  const status = marketSyncStatus || {};
 
-  const signature = currentMarketGridSignature();
-  if (!signature) return;
-
-  marketGridTimer = setTimeout(() => {
-    loadGridMarketSummaries(signature);
-  }, delay);
-}
-
-async function loadGridMarketSummaries(signature) {
-  if (signature !== currentMarketGridSignature()) return;
-
-  // Leave Parse-rate-limit headroom while a detail modal is actively loading.
-  if ($("card-dialog")?.open) {
-    scheduleGridMarketLookup(7000);
+  if (!status.configured) {
+    setMarketProviderStatus(
+      "error",
+      "Market values need CARDSIGHTAI_API_KEY in Netlify."
+    );
     return;
   }
 
-  const token = ++marketGridRequestToken;
+  if (status.running) {
+    const matched = Number(status.matchedRows || 0).toLocaleString();
+    const total = Number(status.totalRows || rows.length || 0).toLocaleString();
+    const valued = Number(status.valuedRows || 0).toLocaleString();
 
+    setMarketProviderStatus(
+      "searching",
+      `${status.phaseLabel || "Market sync in progress"} · ${matched}/${total} matched · ${valued} valued`
+    );
+    return;
+  }
+
+  const matched = Number(status.matchedRows || 0);
+  const valued = Number(status.valuedRows || 0);
+  const total = Number(status.totalRows || rows.length || 0);
+  const unresolved = Number(status.unresolvedRows || Math.max(0, total - matched));
+  const refreshed = marketDateLabel(status.lastPriceRefreshAt || status.lastCompletedAt);
+
+  if (!matched && !valued) {
+    setMarketProviderStatus(
+      "connected",
+      "CardSight is connected. Click Sync Market to build the initial value database."
+    );
+    return;
+  }
+
+  const updatedCopy = refreshed ? ` · refreshed ${refreshed}` : "";
+  setMarketProviderStatus(
+    "connected",
+    `${valued.toLocaleString()} valued · ${matched.toLocaleString()}/${total.toLocaleString()} matched · ${unresolved.toLocaleString()} unresolved${updatedCopy}`
+  );
+}
+
+async function loadPersistentMarketIndex({ rerender = false } = {}) {
   try {
-    const response = await fetch(CONFIG.marketGridEndpoint, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        cards: currentPageRows.map(gridMarketCardPayload)
-      })
-    });
-
+    const response = await fetch(
+      `${CONFIG.marketIndexEndpoint}?ts=${Date.now()}`,
+      { cache: "no-store" }
+    );
     const payload = await response.json().catch(() => ({}));
 
-    if (token !== marketGridRequestToken) return;
-
-    if (response.ok) {
-      marketGridSummaries = {
-        ...marketGridSummaries,
-        ...(payload.summaries || {})
-      };
-
-      marketGridRemainingGroups = Number(payload.remainingGroups || 0);
-      applyGridMarketSummaries();
-
-      if (marketGridRemainingGroups > 0 && signature === currentMarketGridSignature()) {
-        scheduleGridMarketLookup(CONFIG.marketGridRefreshMs);
-      }
-    } else {
-      console.warn("Grid market lookup failed:", payload.error || response.status);
+    if (!response.ok) {
+      throw new Error(payload.error || `Market database returned ${response.status}.`);
     }
+
+    marketGridSummaries = payload.summaries || {};
+    marketSyncStatus = payload.status || {};
+
+    renderMarketSyncStatus();
+    updateStats();
+
+    if (rerender) render();
+
+    if (marketSyncStatus.running) {
+      scheduleMarketPoll();
+    } else if (marketPollTimer) {
+      clearTimeout(marketPollTimer);
+      marketPollTimer = null;
+    }
+
+    return payload;
   } catch (error) {
-    console.warn("Grid market lookup failed:", error);
+    setMarketProviderStatus(
+      "error",
+      `Market database unavailable: ${error.message}`
+    );
+    return null;
   }
 }
 
-function cacheDetailSummaryOnGrid(row, data) {
-  const summary = detailMarketSummary(data);
-  if (!summary) return;
+function scheduleMarketPoll() {
+  if (marketPollTimer) clearTimeout(marketPollTimer);
 
-  marketGridSummaries[cardKey(row)] = summary;
-  applyGridMarketSummaries();
+  marketPollTimer = setTimeout(async () => {
+    await loadPersistentMarketIndex({ rerender: true });
+  }, CONFIG.marketPollMs);
 }
+
+async function startMarketSync() {
+  const password = requestAdminPassword();
+  if (!password) return;
+
+  const button = $("market-sync-btn");
+  if (button) button.disabled = true;
+
+  setMarketProviderStatus(
+    "searching",
+    "Starting market sync…"
+  );
+
+  try {
+    const response = await fetch(CONFIG.marketSyncEndpoint, {
+      method: "POST",
+      headers: {
+        "X-Catalog-Admin": password
+      }
+    });
+
+    if (response.status === 401) {
+      sessionStorage.removeItem("football-card-admin-password");
+      throw new Error("Incorrect catalog admin password.");
+    }
+
+    if (!response.ok && response.status !== 202) {
+      const payload = await response.json().catch(() => ({}));
+      throw new Error(payload.error || `Could not start sync (${response.status}).`);
+    }
+
+    marketSyncStatus.running = true;
+    marketSyncStatus.phaseLabel = "Market sync starting";
+    renderMarketSyncStatus();
+    scheduleMarketPoll();
+  } catch (error) {
+    setMarketProviderStatus("error", error.message);
+  } finally {
+    if (button) button.disabled = false;
+  }
+}
+
 function render() {
   const filtered = filteredRows();
   pageSize = Number($("page-size")?.value || CONFIG.defaultPageSize);
@@ -681,7 +787,6 @@ function render() {
 
   renderPagination(totalPages, totalEntries);
   setupAutoImageLoading();
-  scheduleGridMarketLookup();
 }
 function setOptions(id, values, label) {
   const el = $(id);
@@ -696,8 +801,19 @@ function setOptions(id, values, label) {
 
 function updateStats() {
   const cardCount = rows.reduce((sum,r) => sum + quantity(r), 0);
-  const totalValue = rows.reduce((sum,r) =>
-    sum + moneyNumber(field(r,"value")) * quantity(r), 0);
+
+  let totalValue = 0;
+  let valuedCopies = 0;
+
+  for (const row of rows) {
+    const rawValue = Number(marketGridSummaries[cardKey(row)]?.ungraded);
+    if (!Number.isFinite(rawValue)) continue;
+
+    const qty = quantity(row);
+    totalValue += rawValue * qty;
+    valuedCopies += qty;
+  }
+
   const totalCost = rows.reduce((sum,r) =>
     sum + moneyNumber(field(r,"purchasePrice")) * quantity(r), 0);
 
@@ -707,13 +823,22 @@ function updateStats() {
 
   const valueCard = document.getElementById("stat-value")?.closest(".stat-card");
   const costCard = document.getElementById("stat-cost")?.closest(".stat-card");
-  if (valueCard) valueCard.style.display = mapping.value ? "" : "none";
+
+  if (valueCard) {
+    valueCard.style.display = "";
+    valueCard.title = valuedCopies
+      ? `Based on ${valuedCopies.toLocaleString()} valued card copies`
+      : "Market values have not been synced yet";
+  }
+
   if (costCard) costCard.style.display = mapping.purchasePrice ? "" : "none";
 
   const stats = document.querySelector(".stats");
   if (stats) {
-    const visibleCards = Array.from(stats.querySelectorAll(".stat-card")).filter(card => card.style.display !== "none").length;
-    stats.style.gridTemplateColumns = `repeat(${Math.max(1, visibleCards)}, 1fr)`;
+    const visibleCards = Array.from(stats.querySelectorAll(".stat-card"))
+      .filter(card => card.style.display !== "none").length;
+    stats.style.gridTemplateColumns =
+      `repeat(${Math.max(1, visibleCards)}, 1fr)`;
   }
 }
 
@@ -1776,7 +1901,6 @@ async function loadMarketData(index) {
 
   if (marketDataCache.has(key)) {
     const cached = marketDataCache.get(key);
-    cacheDetailSummaryOnGrid(row, cached);
     target.innerHTML = renderMarketData(cached, key);
     attachMarketGradeEvents(cached, key);
     return;
@@ -1803,7 +1927,6 @@ async function loadMarketData(index) {
     }
 
     marketDataCache.set(key, data);
-    cacheDetailSummaryOnGrid(row, data);
 
     if (activeDetailIndex === index && $("market-content")) {
       $("market-content").innerHTML = renderMarketData(data, key);
@@ -1907,10 +2030,16 @@ async function loadCards() {
     loadStoredImageCache();
     checkImageProvider();
 
-    const [response, manifestResponse, customIndex] = await Promise.all([
+    const [response, manifestResponse, customIndex, marketPayload] = await Promise.all([
       fetch(`${CONFIG.dataEndpoint}?ts=${Date.now()}`, { cache: "no-store" }),
       fetch(`${CONFIG.imageManifest}?ts=${Date.now()}`, { cache: "no-store" }).catch(() => null),
-      loadCustomImageIndex()
+      loadCustomImageIndex(),
+      fetch(`${CONFIG.marketIndexEndpoint}?ts=${Date.now()}`, { cache: "no-store" })
+        .then(async response => {
+          const payload = await response.json().catch(() => ({}));
+          return response.ok ? payload : { summaries: {}, status: { configured: false } };
+        })
+        .catch(() => ({ summaries: {}, status: { configured: false } }))
     ]);
 
     const payload = await response.json();
@@ -1921,6 +2050,8 @@ async function loadCards() {
       : {};
 
     customImageIndex = customIndex || {};
+    marketGridSummaries = marketPayload?.summaries || {};
+    marketSyncStatus = marketPayload?.status || {};
 
     const sourceRows = payload.rows || [];
     if (!sourceRows.length) throw new Error("The sheet connected, but no card rows were found.");
@@ -1937,6 +2068,8 @@ async function loadCards() {
     document.getElementById("grade-filter").style.display = "none";
 
     render();
+    renderMarketSyncStatus();
+    if (marketSyncStatus.running) scheduleMarketPoll();
 
     $("sync-text").textContent = "Live";
     $("sync-pill").classList.add("online");
@@ -1990,15 +2123,14 @@ $("clear-filters").addEventListener("click", () => {
   render();
 });
 
+$("market-sync-btn").addEventListener("click", startMarketSync);
 $("refresh-btn").addEventListener("click", loadCards);
 $("dialog-close").addEventListener("click", () => {
   $("card-dialog").close();
-  if (marketGridRemainingGroups > 0) scheduleGridMarketLookup(500);
 });
 $("card-dialog").addEventListener("click", (e) => {
   if (e.target === $("card-dialog")) {
     $("card-dialog").close();
-    if (marketGridRemainingGroups > 0) scheduleGridMarketLookup(500);
   }
 });
 

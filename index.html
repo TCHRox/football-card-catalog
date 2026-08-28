@@ -20,6 +20,7 @@
       </div>
     </div>
     <div class="header-actions">
+      <button id="market-sync-btn" class="button secondary" type="button">Sync Market</button>
       <button id="refresh-btn" class="button secondary" type="button">Refresh Sheet</button>
     </div>
   </header>
@@ -30,8 +31,13 @@
         <div class="eyebrow">LIVE CATALOG</div>
         <p id="status-line">Connecting to Google Sheets…</p>
         <p id="image-status-line" class="image-status-line">Image search: checking connection…</p>
+        <p id="market-status-line" class="image-status-line">Market values: checking database…</p>
       </div>
       <div class="status-pills">
+        <div class="sync-pill" id="market-sync-pill">
+          <span class="status-dot"></span>
+          <span id="market-sync-text">Market checking</span>
+        </div>
         <div class="sync-pill" id="image-sync-pill">
           <span class="status-dot"></span>
           <span id="image-sync-text">Images checking</span>
@@ -81,7 +87,8 @@
         <option value="player-asc">Player A–Z</option>
         <option value="year-desc">Newest first</option>
         <option value="year-asc">Oldest first</option>
-        <option value="value-desc">Highest value</option>
+        <option value="value-desc">Value: High → Low</option>
+        <option value="value-asc">Value: Low → High</option>
       </select>
 
       <select id="page-size" aria-label="Cards per page">
