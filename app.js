@@ -895,7 +895,7 @@ function render() {
     const realIndex = rows.indexOf(row);
     const sub = subtitle(row);
     return `
-      <article class="card">
+      <article class="card card-clickable" data-index="${realIndex}" tabindex="0" role="button" aria-label="View details for ${escapeHtml(titleFor(row))}">
         <div class="card-image-wrap">
           ${imageHtml(row, realIndex, false)}
           ${isRookie(row) ? '<span class="grade-badge">RC</span>' : ""}
@@ -909,7 +909,6 @@ function render() {
               data-grid-market-key="${escapeHtml(cardKey(row))}">
               ${gridMarketHtml(marketGridSummaries[cardKey(row)])}
             </div>
-            <button class="details-button" data-index="${realIndex}">Details →</button>
           </div>
         </div>
       </article>`;
@@ -917,8 +916,15 @@ function render() {
 
   $("empty-state").classList.toggle("hidden", totalEntries > 0);
 
-  document.querySelectorAll(".details-button").forEach(btn => {
-    btn.addEventListener("click", () => openDetails(Number(btn.dataset.index)));
+  document.querySelectorAll(".card-clickable").forEach(cardEl => {
+    const openCard = () => openDetails(Number(cardEl.dataset.index));
+    cardEl.addEventListener("click", openCard);
+    cardEl.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        openCard();
+      }
+    });
   });
 
   renderPagination(totalPages, totalEntries);
@@ -1823,59 +1829,6 @@ function saleLinkLabel(sale) {
   return sale?.url ? "Open sale" : "Find sale";
 }
 
-function canonicalCardSightMarket(cardKeyValue) {
-  const summary = marketGridSummaries[cardKeyValue] || {};
-  const changes = summary.changes || {};
-
-  const numericOrNull = value => {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : null;
-  };
-
-  return {
-    ungraded: numericOrNull(summary.ungraded),
-    psa9: numericOrNull(summary.psa9 ?? summary.grade9),
-    psa10: numericOrNull(summary.psa10),
-    changes: {
-      ungraded: numericOrNull(changes.ungraded),
-      psa9: numericOrNull(changes.psa9 ?? changes.grade9),
-      psa10: numericOrNull(changes.psa10)
-    },
-    updatedAt: summary.updatedAt || null,
-    available:
-      Number.isFinite(Number(summary.ungraded)) ||
-      Number.isFinite(Number(summary.psa9 ?? summary.grade9)) ||
-      Number.isFinite(Number(summary.psa10))
-  };
-}
-
-function cardSightCurrentValueCards(cardKeyValue) {
-  const current = canonicalCardSightMarket(cardKeyValue);
-
-  const card = (label, value, change) => `
-    <div class="grade-price-card canonical-price-card">
-      <span>${escapeHtml(label)}</span>
-      <strong>${marketMoney(value)}</strong>
-      ${marketChangeHtml(change, true)}
-    </div>`;
-
-  return {
-    current,
-    html: current.available
-      ? `
-        <div class="canonical-price-grid">
-          ${card("Raw", current.ungraded, current.changes.ungraded)}
-          ${card("PSA 9", current.psa9, current.changes.psa9)}
-          ${card("PSA 10", current.psa10, current.changes.psa10)}
-        </div>`
-      : `
-        <div class="market-empty-copy">
-          CardSight has not stored a current value for this card yet.
-          Run <strong>Sync Market</strong> to populate the collection-wide values.
-        </div>`
-  };
-}
-
 function renderMarketData(data, cardKeyValue) {
   if (!data || !data.found) {
     const needsSetup = data?.code === "PARSE_API_NOT_CONFIGURED";
@@ -1899,8 +1852,7 @@ function renderMarketData(data, cardKeyValue) {
 
   const raw = (data.prices || []).find(p => p.label === "Ungraded");
   const recent = data.sales || [];
-  const canonicalMarket = cardSightCurrentValueCards(cardKeyValue);
-  const currentCardSight = canonicalMarket.current;
+  const gradeCards = preferredGradeCards(data.prices);
   const trendSeries = data.trends || {};
   const availableTrendKeys = preferredTrendGradeKeys(trendSeries);
   const storedGradeKey = marketGradeByCard.get(cardKeyValue) || "";
@@ -1922,37 +1874,62 @@ function renderMarketData(data, cardKeyValue) {
     ? trendGradeLabel(selectedGradeKey)
     : "Ungraded";
 
+  const avg = recent.length
+    ? recent.reduce((sum,s) => sum + Number(s.numericPrice || 0), 0) / recent.length
+    : null;
 
+  // Market value should always fall back to the ungraded/raw series,
+  // regardless of which grade tab is currently selected.
+  const ungradedTrend =
+    trendSeries.ungraded ||
+    trendSeries.used ||
+    trendSeries.raw ||
+    data.trend ||
+    [];
+
+  const latestTrendPoint = [...ungradedTrend]
+    .filter(p => Number.isFinite(Number(p.numericPrice)))
+    .sort((a,b) => Date.parse(a.date) - Date.parse(b.date))
+    .at(-1);
+
+  const marketValue = raw?.value ?? latestTrendPoint?.numericPrice ?? null;
   const historyDepth = trendDepthLabel(selectedTrend);
 
   return `
     <section class="market-panel">
-      <div class="canonical-market-summary">
-        <div class="canonical-market-heading">
-          <div>
-            <div class="section-kicker">CURRENT MARKET VALUE</div>
-            <h3>CardSight values</h3>
-          </div>
-          <a class="source-link canonical-source-link"
-             href="https://cardsight.ai/"
-             target="_blank"
-             rel="noopener">CardSight ↗</a>
+      <div class="market-summary-row">
+        <div>
+          <div class="section-kicker">MARKET VALUE</div>
+          <div class="market-primary-value">${marketMoney(marketValue)}</div>
+          <div class="market-small-label">Current ungraded estimate</div>
         </div>
 
-        ${canonicalMarket.html}
+        <div class="market-mini-stat">
+          <span>Recent sales</span>
+          <strong>${recent.length || "—"}</strong>
+        </div>
+
+        <div class="market-mini-stat">
+          <span>Recent avg.</span>
+          <strong>${marketMoney(avg)}</strong>
+        </div>
+
+        <a class="source-link" href="${escapeHtml(data.sourceUrl || "https://www.sportscardspro.com/")}" target="_blank" rel="noopener">
+          SportsCardsPro ↗
+        </a>
       </div>
 
       <div class="market-chart-card">
         <div class="market-section-heading chart-heading-with-controls">
           <div>
-            <div class="section-kicker">SPORTSCARDSPRO PRICE HISTORY</div>
+            <div class="section-kicker">PRICE HISTORY</div>
             <div class="market-trend-title-row">
               <h3>${escapeHtml(selectedGradeLabel)} · 1 year</h3>
               ${marketChangeHtml(selectedTrendChange)}
             </div>
             ${historyDepth
-              ? `<span class="history-depth">${escapeHtml(historyDepth)} available for this grade · SportsCardsPro trend</span>`
-              : `<span class="history-depth">SportsCardsPro historical trend</span>`}
+              ? `<span class="history-depth">${escapeHtml(historyDepth)} available for this grade</span>`
+              : ""}
           </div>
 
           ${availableTrendKeys.length ? `
@@ -1970,23 +1947,37 @@ function renderMarketData(data, cardKeyValue) {
         ${chartSvg(chartPoints)}
       </div>
 
-      <div class="market-reference-strip">
-        <div>
-          <div class="section-kicker">SPORTSCARDSPRO REFERENCE</div>
-          <span>
-            The chart and completed sales below come from SportsCardsPro.
-            Their price-guide estimates can differ from CardSight, so they are not used as the catalog's current market value.
-          </span>
+      <div class="grade-section">
+        <div class="market-section-heading">
+          <div>
+            <div class="section-kicker">PRICE GUIDE</div>
+            <h3>Values by grade</h3>
+          </div>
         </div>
-        <a href="${escapeHtml(data.sourceUrl || "https://www.sportscardspro.com/")}"
-           target="_blank"
-           rel="noopener">Open SportsCardsPro ↗</a>
+
+        ${gradeCards.length ? `
+          <div class="grade-price-grid">
+            ${gradeCards.map(item => {
+              const gradeChange = trendPercentChange(
+                trendPointsForPriceKey(trendSeries, item.key, item.label)
+              );
+
+              return `
+                <div class="grade-price-card">
+                  <span>${escapeHtml(item.label)}</span>
+                  <strong>${marketMoney(item.value)}</strong>
+                  ${marketChangeHtml(gradeChange, true)}
+                </div>`;
+            }).join("")}
+          </div>` : `
+          <div class="market-empty-copy">No grade-specific prices are currently available for this card.</div>
+        `}
       </div>
 
       <div class="recent-sales-section">
         <div class="market-section-heading">
           <div>
-            <div class="section-kicker">SPORTSCARDSPRO RECENT SALES</div>
+            <div class="section-kicker">RECENT SALES</div>
             <h3>Completed listings</h3>
           </div>
         </div>
@@ -2016,11 +2007,11 @@ function renderMarketData(data, cardKeyValue) {
       </div>
 
       <div class="market-source-note">
-        <strong>Current values:</strong> CardSight, shared with the catalog card view.
-        <strong>Historical chart and completed-sale references:</strong>
-        <a href="https://parse.bot/marketplace/6808cd1c-6144-442b-b0db-17727c37d562/sportscardspro-com-api"
-        target="_blank" rel="noopener">SportsCardsPro via Parse</a>.
-        The two services can calculate different market estimates; only CardSight is used for the site's canonical current value and value sorting.
+        Pricing, monthly historical trend data, and completed-sale history are sourced through
+        the managed <a href="https://parse.bot/marketplace/6808cd1c-6144-442b-b0db-17727c37d562/sportscardspro-com-api"
+        target="_blank" rel="noopener">SportsCardsPro API on Parse</a>.
+        Historical depth varies by card. Sale rows open the original listing when a URL is available;
+        otherwise they open a sold-listing search using the exact sale title.
       </div>
     </section>`;
 }
