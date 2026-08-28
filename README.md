@@ -502,3 +502,11 @@ card has no ungraded trend, the first available grade series is used instead.
 The Values by Grade section remains below the chart as the current price-guide
 snapshot, while the tabs above the chart show how each available grade's value
 has changed over the last year.
+
+
+## v22 — v21 market chart hotfix
+
+- Fixed a leftover `allTrend` variable reference from the old time-range chart.
+- Market value fallback now explicitly uses the ungraded/raw historical series,
+  regardless of which grade-history tab is selected.
+- Grade-history tabs from v21 are otherwise unchanged.

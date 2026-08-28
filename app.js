@@ -1399,7 +1399,16 @@ function renderMarketData(data, cardKeyValue) {
     ? recent.reduce((sum,s) => sum + Number(s.numericPrice || 0), 0) / recent.length
     : null;
 
-  const latestTrendPoint = allTrend
+  // Market value should always fall back to the ungraded/raw series,
+  // regardless of which grade tab is currently selected.
+  const ungradedTrend =
+    trendSeries.ungraded ||
+    trendSeries.used ||
+    trendSeries.raw ||
+    data.trend ||
+    [];
+
+  const latestTrendPoint = [...ungradedTrend]
     .filter(p => Number.isFinite(Number(p.numericPrice)))
     .sort((a,b) => Date.parse(a.date) - Date.parse(b.date))
     .at(-1);
