@@ -978,3 +978,38 @@ footer {
     min-width: 0;
   }
 }
+
+
+/* v21 price-history grade tabs */
+.chart-grade-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  justify-content: flex-end;
+  max-width: 520px;
+}
+.chart-grade-button {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: rgba(255,255,255,.025);
+  color: var(--muted);
+  padding: 7px 10px;
+  font-weight: 800;
+  font-size: .7rem;
+  white-space: nowrap;
+}
+.chart-grade-button:hover {
+  color: var(--text);
+  border-color: rgba(232,180,67,.4);
+}
+.chart-grade-button.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #08111f;
+}
+@media (max-width: 820px) {
+  .chart-grade-controls {
+    justify-content: flex-start;
+    max-width: none;
+  }
+}

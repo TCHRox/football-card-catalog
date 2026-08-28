@@ -70,7 +70,7 @@ let currentPageRows = [];
 let activeDetailIndex = null;
 let customEditorOpen = false;
 const marketDataCache = new Map();
-const marketRangeByCard = new Map();
+const marketGradeByCard = new Map();
 
 const $ = (id) => document.getElementById(id);
 const norm = (s) => String(s ?? "")
@@ -1230,74 +1230,86 @@ function preferredGradeCards(prices) {
   return ordered.slice(0, 8);
 }
 
-function filterTrendForRange(points, range) {
+function filterTrendToOneYear(points) {
   const sorted = (points || [])
     .filter(p => Number.isFinite(Date.parse(p.date)))
     .sort((a,b) => Date.parse(a.date) - Date.parse(b.date));
 
-  if (!sorted.length || range === "all") return sorted;
+  if (!sorted.length) return [];
 
   const newest = Date.parse(sorted[sorted.length - 1].date);
   const cutoff = new Date(newest);
-
-  if (range === "1y") {
-    cutoff.setFullYear(cutoff.getFullYear() - 1);
-  } else if (range === "5y") {
-    cutoff.setFullYear(cutoff.getFullYear() - 5);
-  } else {
-    return sorted;
-  }
+  cutoff.setFullYear(cutoff.getFullYear() - 1);
 
   return sorted.filter(p => Date.parse(p.date) >= cutoff.getTime());
 }
 
-function filterSalesForDays(sales, days) {
-  const sorted = (sales || [])
-    .map(sale => ({
-      ...sale,
-      _timestamp: Date.parse(sale.date),
-      numericPrice: Number(
-        sale.numericPrice !== undefined && sale.numericPrice !== null
-          ? sale.numericPrice
-          : String(sale.price || "").replace(/[$,]/g, "")
-      )
-    }))
-    .filter(sale => Number.isFinite(sale._timestamp) && Number.isFinite(sale.numericPrice))
-    .sort((a,b) => a._timestamp - b._timestamp);
+function trendGradeLabel(key) {
+  const labels = {
+    ungraded: "Ungraded",
+    used: "Ungraded",
+    raw: "Ungraded",
+    grade_7: "Grade 7",
+    grade_8: "Grade 8",
+    grade_9: "Grade 9",
+    grade_9_5: "Grade 9.5",
+    tag_10: "TAG 10",
+    ace_10: "ACE 10",
+    sgc_10: "SGC 10",
+    cgc_10: "CGC 10",
+    psa_10: "PSA 10",
+    bgs_10: "BGS 10",
+    bgs_10_black: "BGS 10 Black",
+    cgc_10_pristine: "CGC 10 Pristine"
+  };
 
-  if (!sorted.length) return [];
-
-  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-  return sorted.filter(sale => sale._timestamp >= cutoff);
+  return labels[key] ||
+    String(key || "")
+      .replace(/_/g, " ")
+      .replace(/\b\w/g, ch => ch.toUpperCase());
 }
 
-function chartSeriesForRange(data, range) {
-  if (range === "1w") {
-    return {
-      points: filterSalesForDays(data.sales || [], 7),
-      title: "Recent ungraded sales",
-      subtitle: "Completed sales from the last 7 days",
-      usesSales: true
-    };
+function preferredTrendGradeKeys(trends) {
+  const available = trends || {};
+  const preferred = [
+    "ungraded", "used", "raw",
+    "grade_7", "grade_8", "grade_9", "grade_9_5",
+    "psa_10", "sgc_10", "cgc_10", "bgs_10",
+    "tag_10", "ace_10", "bgs_10_black", "cgc_10_pristine"
+  ];
+
+  const result = [];
+  const seenLabels = new Set();
+
+  for (const key of preferred) {
+    if (!Array.isArray(available[key]) || available[key].length < 2) continue;
+
+    const label = trendGradeLabel(key);
+    // SportsCardsPro may expose the raw series as ungraded, used, or raw.
+    // Only show one "Ungraded" tab.
+    if (seenLabels.has(label)) continue;
+
+    seenLabels.add(label);
+    result.push(key);
   }
 
-  if (range === "1m") {
-    return {
-      points: filterSalesForDays(data.sales || [], 30),
-      title: "Recent ungraded sales",
-      subtitle: "Completed sales from the last 30 days",
-      usesSales: true
-    };
+  // Include any other usable grade series the API may add later.
+  for (const [key, points] of Object.entries(available)) {
+    if (!Array.isArray(points) || points.length < 2) continue;
+    const label = trendGradeLabel(key);
+    if (seenLabels.has(label)) continue;
+    seenLabels.add(label);
+    result.push(key);
   }
 
-  const points = filterTrendForRange(data.trend || [], range);
+  return result;
+}
 
-  return {
-    points,
-    title: "Ungraded market trend",
-    subtitle: "",
-    usesSales: false
-  };
+function defaultTrendGradeKey(trends) {
+  const keys = preferredTrendGradeKeys(trends);
+  return keys.find(key => ["ungraded", "used", "raw"].includes(key)) ||
+    keys[0] ||
+    "";
 }
 
 function trendDepthLabel(points) {
@@ -1363,10 +1375,25 @@ function renderMarketData(data, cardKeyValue) {
   const raw = (data.prices || []).find(p => p.label === "Ungraded");
   const recent = data.sales || [];
   const gradeCards = preferredGradeCards(data.prices);
-  const allTrend = data.trend || [];
-  const selectedRange = marketRangeByCard.get(cardKeyValue) || "1y";
-  const chartSeries = chartSeriesForRange(data, selectedRange);
-  const chartPoints = chartSeries.points;
+  const trendSeries = data.trends || {};
+  const availableTrendKeys = preferredTrendGradeKeys(trendSeries);
+  const storedGradeKey = marketGradeByCard.get(cardKeyValue) || "";
+  const selectedGradeKey = availableTrendKeys.includes(storedGradeKey)
+    ? storedGradeKey
+    : defaultTrendGradeKey(trendSeries);
+
+  if (selectedGradeKey) {
+    marketGradeByCard.set(cardKeyValue, selectedGradeKey);
+  }
+
+  const selectedTrend = selectedGradeKey
+    ? (trendSeries[selectedGradeKey] || [])
+    : (data.trend || []);
+
+  const chartPoints = filterTrendToOneYear(selectedTrend);
+  const selectedGradeLabel = selectedGradeKey
+    ? trendGradeLabel(selectedGradeKey)
+    : "Ungraded";
 
   const avg = recent.length
     ? recent.reduce((sum,s) => sum + Number(s.numericPrice || 0), 0) / recent.length
@@ -1378,7 +1405,7 @@ function renderMarketData(data, cardKeyValue) {
     .at(-1);
 
   const marketValue = raw?.value ?? latestTrendPoint?.numericPrice ?? null;
-  const historyDepth = trendDepthLabel(allTrend);
+  const historyDepth = trendDepthLabel(selectedTrend);
 
   return `
     <section class="market-panel">
@@ -1408,36 +1435,25 @@ function renderMarketData(data, cardKeyValue) {
         <div class="market-section-heading chart-heading-with-controls">
           <div>
             <div class="section-kicker">PRICE HISTORY</div>
-            <h3>${escapeHtml(chartSeries.title)}</h3>
-            ${chartSeries.subtitle
-              ? `<span class="history-depth">${escapeHtml(chartSeries.subtitle)}</span>`
-              : historyDepth
-                ? `<span class="history-depth">${escapeHtml(historyDepth)} available</span>`
-                : ""}
+            <h3>${escapeHtml(selectedGradeLabel)} · 1 year</h3>
+            ${historyDepth
+              ? `<span class="history-depth">${escapeHtml(historyDepth)} available for this grade</span>`
+              : ""}
           </div>
 
-          <div class="chart-range-controls" role="group" aria-label="Chart range">
-            ${[
-              ["1w", "1W"],
-              ["1m", "1M"],
-              ["1y", "1Y"],
-              ["5y", "5Y"],
-              ["all", "All"]
-            ].map(([value,label]) => `
-              <button type="button"
-                class="chart-range-button ${selectedRange === value ? "active" : ""}"
-                data-market-range="${value}">
-                ${label}
-              </button>`).join("")}
-          </div>
+          ${availableTrendKeys.length ? `
+            <div class="chart-grade-controls" role="group" aria-label="Price history grade">
+              ${availableTrendKeys.map(key => `
+                <button type="button"
+                  class="chart-grade-button ${selectedGradeKey === key ? "active" : ""}"
+                  data-market-grade="${escapeHtml(key)}">
+                  ${escapeHtml(trendGradeLabel(key))}
+                </button>`).join("")}
+            </div>` : ""}
+
         </div>
 
-        ${chartSeries.usesSales && data.salesPending
-          ? `<div class="sales-loading-row chart-sales-loading">
-              <span class="market-spinner" aria-hidden="true"></span>
-              <span>Loading recent sales for this range…</span>
-            </div>`
-          : chartSvg(chartPoints)}
+        ${chartSvg(chartPoints)}
       </div>
 
       <div class="grade-section">
@@ -1502,66 +1518,21 @@ function renderMarketData(data, cardKeyValue) {
     </section>`;
 }
 
-function attachMarketRangeEvents(data, cardKeyValue) {
-  document.querySelectorAll("[data-market-range]").forEach(button => {
+function attachMarketGradeEvents(data, cardKeyValue) {
+  document.querySelectorAll("[data-market-grade]").forEach(button => {
     button.addEventListener("click", () => {
-      marketRangeByCard.set(cardKeyValue, button.dataset.marketRange || "1y");
+      marketGradeByCard.set(
+        cardKeyValue,
+        button.dataset.marketGrade || defaultTrendGradeKey(data.trends || {})
+      );
 
       const target = $("market-content");
       if (!target) return;
 
       target.innerHTML = renderMarketData(data, cardKeyValue);
-      attachMarketRangeEvents(data, cardKeyValue);
+      attachMarketGradeEvents(data, cardKeyValue);
     });
   });
-}
-
-async function loadMarketSales(index, marketData) {
-  const row = rows[index];
-  if (!row || !marketData?.cardId) return;
-
-  const key = cardKey(row);
-
-  // get_card sometimes already includes sales; don't spend another API call if so.
-  if ((marketData.sales || []).length) return;
-
-  try {
-    const params = new URLSearchParams({
-      cardId: marketData.cardId,
-      title: `${fullName(row)} ${field(row, "year")} ${brandFor(row)} ${field(row, "cardNumber")}`
-    });
-
-    const response = await fetch(
-      `${CONFIG.marketSalesEndpoint}?${params.toString()}`,
-      { cache: "default" }
-    );
-
-    const payload = await response.json().catch(() => ({}));
-
-    if (!response.ok) {
-      marketData.salesPending = false;
-      marketData.salesError = payload.message || payload.error || `Sales lookup failed (${response.status}).`;
-    } else {
-      marketData.sales = payload.sales || [];
-      marketData.salesPending = false;
-    }
-
-    marketDataCache.set(key, marketData);
-
-    if (activeDetailIndex === index && $("market-content")) {
-      $("market-content").innerHTML = renderMarketData(marketData, key);
-      attachMarketRangeEvents(marketData, key);
-    }
-  } catch (error) {
-    marketData.salesPending = false;
-    marketData.salesError = error.message;
-    marketDataCache.set(key, marketData);
-
-    if (activeDetailIndex === index && $("market-content")) {
-      $("market-content").innerHTML = renderMarketData(marketData, key);
-      attachMarketRangeEvents(marketData, key);
-    }
-  }
 }
 
 async function loadMarketData(index) {
@@ -1575,7 +1546,7 @@ async function loadMarketData(index) {
   if (marketDataCache.has(key)) {
     const cached = marketDataCache.get(key);
     target.innerHTML = renderMarketData(cached, key);
-    attachMarketRangeEvents(cached, key);
+    attachMarketGradeEvents(cached, key);
     return;
   }
 
@@ -1603,7 +1574,7 @@ async function loadMarketData(index) {
 
     if (activeDetailIndex === index && $("market-content")) {
       $("market-content").innerHTML = renderMarketData(data, key);
-      attachMarketRangeEvents(data, key);
+      attachMarketGradeEvents(data, key);
     }
 
     if (data.found && data.salesPending) {

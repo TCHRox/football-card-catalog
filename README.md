@@ -472,3 +472,33 @@ comps API we can switch this project to.
 Directly scraping the eBay sold-results web page would be more brittle than the
 current managed source and would add another site-specific anti-bot/parser
 dependency.
+
+
+## v21 — price history by grade
+
+The time-range tabs have been removed.
+
+Price History now always displays the most recent one year of available
+SportsCardsPro trend data.
+
+The tabs now switch the grade/condition being graphed. Examples include:
+
+- Ungraded
+- Grade 7
+- Grade 8
+- Grade 9
+- Grade 9.5
+- PSA 10
+- SGC 10
+- CGC 10
+- BGS 10
+
+Only grades for which SportsCardsPro actually returns at least two historical
+trend points are shown. This prevents empty or meaningless grade tabs.
+
+Ungraded is the default whenever an ungraded/raw trend exists. If a particular
+card has no ungraded trend, the first available grade series is used instead.
+
+The Values by Grade section remains below the chart as the current price-guide
+snapshot, while the tabs above the chart show how each available grade's value
+has changed over the last year.
