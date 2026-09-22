@@ -2,7 +2,7 @@ import { getStore } from "@netlify/blobs";
 
 const SCRAPER_ID = "5e67e7a5-866b-4073-8d41-881feb8b574b";
 const BASE_URL = `https://api.parse.bot/scraper/${SCRAPER_ID}`;
-const CACHE_STORE = "football-card-market-sales-cache";
+const CACHE_STORE = "football-card-market-sales-cache-v30";
 const SALES_CACHE_MS = 12 * 60 * 60 * 1000;
 
 function json(body,status=200,cacheSeconds=0){
@@ -39,7 +39,8 @@ function normalizeSale(sale){
   if(!sale||typeof sale!=="object") return null;
   const date=sale.date||sale.sale_date||sale.sold_date||"";
   const price=numberValue(sale.price??sale.sale_price);
-  if(!date||price===null) return null;
+  const title = sale.title || sale.listing_title;
+  if(!date || !title || !Number.isFinite(Date.parse(date)) || price===null || price<=0) return null;
   return {
     date:String(date),
     title:String(sale.title||sale.listing_title||"Completed sale"),
@@ -76,12 +77,13 @@ async function parseGet(apiKey,endpoint,params={}){
   }
 
   const response=await fetch(url,{
+    signal:AbortSignal.timeout(20000),
     headers:{"X-API-Key":apiKey,"Accept":"application/json"}
   });
 
   const text=await response.text();
   let payload={};
-  try{payload=JSON.parse(text)}catch{payload={raw:text.slice(0,500)}}
+  try{payload=JSON.parse(text)}catch{throw new Error(`Parse returned invalid JSON (HTTP ${response.status}).`)}
 
   if(!response.ok){
     const message=payload?.error||payload?.message||payload?.detail||`Parse returned HTTP ${response.status}.`;
@@ -135,6 +137,6 @@ export default async(request)=>{
         message:"Recent sales are temporarily rate-limited by Parse. The chart and price guide are still available."
       },429);
     }
-    return json({message:error.message},500);
+    return json({message:"Recent sales could not be loaded. Check the Parse account and Netlify function logs."},500);
   }
 };

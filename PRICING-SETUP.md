@@ -1,3 +1,7 @@
+# v31.1 — Recent sales restored
+
+Recent sales are available inside each card popup with **Load recent sales**. Restore/keep `PARSE_API_KEY` as a secret available to production Functions. `SERPER_API_KEY` helps discover cards. Requests use your existing Parse service and its credits, separately from SportsCardsPro. Provider access was not live-tested. Deploy the supplied files through your existing Netlify build. SportsCardsPro weekly pricing and saved history are unchanged.
+
 # Football Card Catalog v31
 
 SportsCardsPro Collector integration for ungraded prices. Based on the representative's confirmation that your private catalog can use the $6/month Collector API.
@@ -6,7 +10,7 @@ SportsCardsPro Collector integration for ungraded prices. Based on the represent
 
 1. Unzip this package. In your existing site source, replace the entire `netlify/functions` folder with the supplied folder, then replace the remaining supplied files. Removing the old Functions folder prevents the obsolete pricing workers from continuing to run.
 2. Keep `SPORTSCARDSPRO_API_TOKEN` and `CARD_CATALOG_ADMIN_PASSWORD` as secret Netlify variables accessible to Functions. Check that the Production context contains the correct token; your screenshot shows four separate context values.
-3. Keep `SERPER_API_KEY` if you want automatic image search. After deploying v31, delete `CARDSIGHTAI_API_KEY` and `PARSE_API_KEY`; this version does not use them.
+3. Keep `SERPER_API_KEY` if you want automatic image search. After deploying v31, delete `CARDSIGHTAI_API_KEY`. Keep `PARSE_API_KEY` for recent sales.
 4. Deploy through your existing Git-connected Netlify build (commit and push the replacement files) or a Netlify CLI deployment that builds Functions. Static-file-only drag-and-drop is insufficient. Dependencies are in package.json; Netlify configuration is included.
 5. Open the deployed catalog, click **Sync Market**, and enter your catalog admin password. Watch the status for configuration errors or matching progress. The live token can only be verified after deployment.
 

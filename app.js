@@ -1447,6 +1447,39 @@ function chartSvg(points) {
     </svg>`;
 }
 
+const recentSalesState = new Map();
+function recentSalesPanel(index) {
+  const state = recentSalesState.get(index);
+  if (!state) return '<p>Load recent ungraded sales through the previous Parse integration.</p><button class="button" onclick="loadRecentSales('+index+')">Load recent sales</button><p class="market-small-label">Uses Parse credits separately from your SportsCardsPro subscription.</p>';
+  if (state.loading) return '<p>Loading recent sales…</p>';
+  if (state.error) return '<p>'+escapeHtml(state.error)+'</p><button class="button" onclick="loadRecentSales('+index+')">Retry recent sales</button>';
+  if (!state.sales.length) return '<p>No recent sales were returned for this card.</p>';
+  return '<p class="market-small-label">SportsCardsPro via Parse · Check listing condition and variant before comparing.</p><div class="sales-list">'+state.sales.map(sale=>{
+    const raw=String(sale.url||sale.link||'');
+    let safe='';try{const u=new URL(raw);if(u.protocol==='https:'||u.protocol==='http:')safe=u.href;}catch{}
+    const title=escapeHtml(sale.title||'Completed sale');
+    return '<article class="sale-row"><div>'+(safe?'<a href="'+escapeHtml(safe)+'" target="_blank" rel="noopener noreferrer">'+title+' ↗</a>':title)+'</div><div>'+escapeHtml(sale.date||'')+' · '+escapeHtml(marketMoney(Number(sale.numericPrice??sale.price)))+'</div></article>';
+  }).join('')+'</div>';
+}
+async function loadRecentSales(index) {
+  if(recentSalesState.get(index)?.loading)return;
+  recentSalesState.set(index,{loading:true});
+  const paint=()=>{if(activeDetailIndex===index){const target=document.getElementById('recent-sales-content');if(target)target.innerHTML=recentSalesPanel(index);}};
+  paint();
+  try {
+    const row=rows[index];
+    const query=new URLSearchParams({player:fullName(row),year:field(row,'year'),brand:brandFor(row),type:cardTypeFor(row),number:field(row,'cardNumber'),notes:field(row,'notes')||''});
+    const response=await fetch('/.netlify/functions/card-market?'+query);
+    const match=await response.json();
+    if(!response.ok||!match.found||!match.cardId)throw new Error(match.message||'No confirmed sales match was found.');
+    const result=await fetch('/.netlify/functions/card-market-sales?'+new URLSearchParams({cardId:match.cardId}));
+    const payload=await result.json();
+    if(!result.ok)throw new Error(payload.message||'Recent sales are unavailable.');
+    recentSalesState.set(index,{sales:(payload.sales||[]).filter(s=>s.title&&Date.parse(s.date)&&Number(s.numericPrice??s.price)>0)});
+  } catch(error) {recentSalesState.set(index,{error:error.message||'Recent sales could not be loaded.'});}
+  paint();
+}
+
 function loadMarketData(index) {
   const row=rows[index],target=$("market-content");if(!row||!target)return;
   const data=marketGridSummaries[marketKey(row)]||{};
@@ -1454,7 +1487,8 @@ function loadMarketData(index) {
   const link=data.url||`https://www.sportscardspro.com/search-products?q=${encodeURIComponent(query)}&type=prices`;
   const points=(data.history||[]).filter(p=>Date.parse(p.date)>=Date.now()-366*86400000);
   target.innerHTML=`<section class="market-panel"><div class="section-kicker">SPORTSCARDSPRO</div><h3>Ungraded market value</h3><div class="market-primary-value">${compactMarketValue(data.ungraded)}</div><p>${escapeHtml(data.reason||(!data.checkedAt?'Awaiting the first price sync.':'Current ungraded guide value.'))}</p><p class="market-small-label">${data.checkedAt?`Last checked ${escapeHtml(marketDateLabel(data.checkedAt))}`:''}${data.id?` · Product ID ${escapeHtml(data.id)}`:''}</p>${data.title?`<p>${escapeHtml(data.set)} · ${escapeHtml(data.title)}</p>`:''}<a href="${escapeHtml(link)}" target="_blank" rel="noopener">${data.url?'View card on':'Find card on'} SportsCardsPro ↗</a></section>
-  <section class="market-panel"><h3>Saved price history</h3>${points.length>1?chartSvg(points):'<p>History will build as prices are refreshed. Two snapshots are needed for a chart.</p>'}<p class="market-small-label">Weekly guide-value snapshots collected by this catalog. These are not individual sales. Historical sales and graded prices are not included in this integration.</p></section>
+  <section class="market-panel"><h3>Saved price history</h3>${points.length>1?chartSvg(points):'<p>History will build as prices are refreshed. Two snapshots are needed for a chart.</p>'}<p class="market-small-label">Weekly guide-value snapshots collected by this catalog. These are not individual sales. Recent sales below use a separate Parse integration.</p></section>
+  <section class="market-panel recent-sales-section"><h3>Recent sales</h3><div id="recent-sales-content">${recentSalesPanel(index)}</div></section>
   ${data.state==='review'?`<section class="market-panel"><h3>Confirm this card</h3><p>Add the correct numeric ID in the <strong>SportsCardsPro ID</strong> column at the far right of your Google Sheet. Then click Sync Market.</p>${(data.candidates||[]).map(c=>`<p><strong>${escapeHtml(c.id)}</strong> — ${escapeHtml(c.set)} · ${escapeHtml(c.title)}</p>`).join('')}<p class="market-small-label">Suggestions require your review; they have not been applied.</p></section>`:''}`;
 }
 

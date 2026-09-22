@@ -8,7 +8,7 @@ const SUMMARY_STORE = "football-card-market-summary";
 const SUMMARY_INDEX_KEY = "__index__";
 const MARKET_CACHE_MS = 12 * 60 * 60 * 1000;
 const MATCH_CACHE_MS = 180 * 24 * 60 * 60 * 1000;
-const SCHEMA_VERSION = 19;
+const SCHEMA_VERSION = 30;
 
 function json(body, status = 200, cacheSeconds = 0) {
   const headers = { "content-type": "application/json; charset=utf-8" };
@@ -35,7 +35,7 @@ function norm(value) {
 
 function cardCacheKey(card) {
   const raw = [
-    "v19",
+    "v30",
     card.player, card.year, card.brand, card.type, card.number, card.notes
   ].map(norm).join("|");
   return Buffer.from(raw, "utf8").toString("base64url");
@@ -57,13 +57,14 @@ async function parseGet(apiKey, endpoint, params = {}) {
   }
 
   const response = await fetch(url, {
+    signal: AbortSignal.timeout(20000),
     headers: { "X-API-Key": apiKey, "Accept": "application/json" }
   });
 
   const text = await response.text();
   let payload = {};
   try { payload = JSON.parse(text); }
-  catch { payload = { raw: text.slice(0, 500) }; }
+  catch { throw new Error(`Parse returned invalid JSON (HTTP ${response.status}).`); }
 
   if (!response.ok) {
     const message = payload?.error || payload?.message || payload?.detail ||
@@ -110,16 +111,23 @@ function scoreSearchResult(result, card) {
   let score = 40;
 
   if (card.year && (year === String(card.year) || setName.includes(norm(card.year)))) score += 24;
-  else if (card.year) score -= 30;
+  else if (card.year) return -100;
 
   const targetNumber = norm(card.number);
   if (targetNumber && number === targetNumber) score += 40;
-  else if (targetNumber && combined.includes(targetNumber)) score += 18;
-  else if (targetNumber) score -= 35;
+  else if (targetNumber && (` ${combined} `).includes(` ${targetNumber} `)) score += 18;
+  else if (targetNumber) return -100;
 
   const brandTokens = normalizeBrand(card.brand).split(/\s+/).filter(Boolean);
   if (brandTokens.length && brandTokens.every(t => setName.includes(t))) score += 24;
-  else if (brandTokens.some(t => setName.includes(t))) score += 10;
+  else return -100;
+
+  const descriptor = norm(card.notes || (!["base", "base set", "parallel", "insert", "subset", ""].includes(norm(card.type)) ? card.type : ""));
+  if (["parallel", "insert", "subset"].includes(norm(card.type)) && !descriptor) return -100;
+  if (descriptor && !descriptor.split(" ").every(token => combined.split(" ").includes(token))) return -100;
+  const qualifiers = ["chrome", "optic", "refractor", "silver", "gold", "red", "blue", "green", "autograph", "relic"];
+  const expected = norm([card.brand, card.type, card.notes].join(" ")).split(" ");
+  if (qualifiers.some(token => combined.split(" ").includes(token) && !expected.includes(token))) return -100;
 
   const typeTokens = norm(card.type)
     .split(/\s+/)
@@ -143,9 +151,11 @@ function resultsArray(search) {
 }
 
 function bestResult(results, card) {
-  return results
+  const ranked = results
     .map(result => ({ result, score: scoreSearchResult(result, card) }))
-    .sort((a,b) => b.score - a.score)[0] || null;
+    .sort((a,b) => b.score - a.score);
+  if (ranked.length > 1 && ranked[0].score === ranked[1].score) return null;
+  return ranked[0] || null;
 }
 
 async function findViaSerper(apiKey, card) {
@@ -187,9 +197,9 @@ async function findViaSerper(apiKey, card) {
         pseudo: {
           card_id: cardId,
           card_name: `${item.title || ""} ${slugText}`,
-          card_number: card.number,
+          card_number: "",
           set_name: `${item.title || ""} ${slugText}`,
-          year: card.year,
+          year: "",
           sport: "football"
         }
       };
@@ -202,7 +212,7 @@ async function findViaSerper(apiKey, card) {
     .sort((a,b) => b.score - a.score);
 
   const best = candidates[0];
-  if (!best || best.score < 85) return null;
+  if (!best || best.score < 85 || candidates[1]?.score === best.score) return null;
 
   return {
     cardId: best.cardId,
