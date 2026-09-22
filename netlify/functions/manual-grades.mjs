@@ -13,9 +13,10 @@ export default async request=>{
  let body={};try{if(request.method==='POST')body=await request.json();}catch{return json({error:'Invalid request.'},400);}
  const key=request.method==='GET'?new URL(request.url).searchParams.get('key'):body.key;
  if(typeof key!=='string'||!key||key.length>2000)return json({error:'Invalid card identity.'},400);
- if(request.method==='POST'){try{validatePrices(body.prices);}catch(e){return json({error:e.message},400);}}
+ if(request.method==='POST'){try{validatePrices(body.prices);if(body.selectedGrade!==undefined&&body.selectedGrade!==null&&!grades.includes(body.selectedGrade))throw Error('Choose a valid grade.');if(body.applyToCollection!==undefined&&typeof body.applyToCollection!=='boolean')throw Error('Invalid collection option.');if(body.selectedGrade&&body.prices[body.selectedGrade]===null)throw Error('Enter a price for the selected grade.');if(body.applyToCollection&&!body.selectedGrade)throw Error('Select a grade first.');}catch(e){return json({error:e.message},400);}}
  try{const store=getStore({name:'football-card-manual-grades-v1',consistency:'strong'});const id=createHash('sha256').update(key).digest('hex');
  if(request.method==='GET')return json(await store.get(id,{type:'json'})||{prices:{}});
- const data={prices:body.prices,updatedAt:new Date().toISOString()};await store.setJSON(id,data);return json(data);
+ const previous=await store.get(id,{type:'json'})||{};const selectedGrade=body.selectedGrade===undefined?(previous.selectedGrade||null):body.selectedGrade;const applyToCollection=body.applyToCollection===undefined?Boolean(previous.applyToCollection):body.applyToCollection;
+ const data={key,prices:body.prices,selectedGrade,applyToCollection:applyToCollection&&Boolean(selectedGrade)&&body.prices[selectedGrade]!==null,updatedAt:new Date().toISOString()};await store.setJSON(id,data);return json(data);
  }catch{return json({error:'Saved-price storage is unavailable. Please retry.'},503);}
 };

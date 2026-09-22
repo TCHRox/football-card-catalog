@@ -555,15 +555,16 @@ function compactMarketValue(value) {
   }).format(n);
 }
 
-function gridMarketHtml(summary) {
+function gridMarketHtml(summary,key) {
   const data=summary||{};
-  return `<div class="card-market-heading">Ungraded value</div><div class="card-market-row"><strong class="card-market-price">${compactMarketValue(data.ungraded)}</strong></div><div class="market-small-label">${data.state === "review" ? "Match needs review" : data.checkedAt ? `Checked ${new Date(data.checkedAt).toLocaleDateString()}` : "Awaiting sync"}</div>`;
+  const manual=manualGradeEntries[key];const selectedPrice=manual?.prices?.[manual.selectedGrade];const hasGrade=manual?.selectedGrade&&typeof selectedPrice==='number';
+  return `<div class="grid-price-pair"><div><div class="card-market-heading">Ungraded value</div><strong class="card-market-price">${compactMarketValue(data.ungraded)}</strong></div>${hasGrade?`<div><div class="card-market-heading">${escapeHtml(manual.selectedGrade==='PSA 10'?'PSA 10':'Grade '+manual.selectedGrade)}${manual.applyToCollection?' · Total':''}</div><strong class="card-market-price">${compactMarketValue(selectedPrice)}</strong></div>`:''}</div><div class="market-small-label">${data.state === "review" ? "Match needs review" : data.checkedAt ? `Checked ${new Date(data.checkedAt).toLocaleDateString()}` : "Awaiting sync"}</div>`;
 }
 
 function applyGridMarketSummaries() {
   document.querySelectorAll("[data-grid-market-key]").forEach(node => {
     const key = node.dataset.gridMarketKey || "";
-    node.innerHTML = gridMarketHtml(marketGridSummaries[key]);
+    node.innerHTML = gridMarketHtml(marketGridSummaries[key],key);
   });
 }
 
@@ -760,7 +761,7 @@ function render() {
           <div class="card-bottom card-bottom-market">
             <div class="card-market-block"
               data-grid-market-key="${escapeHtml(marketKey(row))}">
-              ${gridMarketHtml(marketGridSummaries[marketKey(row)])}
+              ${gridMarketHtml(marketGridSummaries[marketKey(row)],marketKey(row))}
             </div>
           </div>
         </div>
@@ -805,7 +806,9 @@ function updateStats() {
   let valuedCopies = 0;
 
   for (const row of rows) {
-    const rawValue = priceOrNaN(marketGridSummaries[marketKey(row)]?.ungraded);
+    const manual=manualGradeEntries[marketKey(row)];
+    const selected=manual?.prices?.[manual.selectedGrade];
+    const rawValue = manual?.applyToCollection&&typeof selected==='number'?selected:priceOrNaN(marketGridSummaries[marketKey(row)]?.ungraded);
     if (!Number.isFinite(rawValue)) continue;
 
     const qty = quantity(row);
@@ -817,7 +820,7 @@ function updateStats() {
     sum + moneyNumber(field(r,"purchasePrice")) * quantity(r), 0);
 
   $("stat-cards").textContent = cardCount.toLocaleString();
-  $("stat-value").textContent = totalValue ? money(totalValue) : "—";
+  $("stat-value").textContent = manualGradesReady?(valuedCopies?money(totalValue):"—"):"Unavailable";
   $("stat-cost").textContent = totalCost ? money(totalCost) : "—";
 
   const valueCard = document.getElementById("stat-value")?.closest(".stat-card");
@@ -1456,7 +1459,7 @@ function chartSvg(points) {
 
 function renderConfirmation(index){
  const panel=$('card-confirmation'),data=marketGridSummaries[marketKey(rows[index])]||{};
- panel.innerHTML='<h3>'+(data.id||data.manualId?'Card match':'Confirm this card')+'</h3><p class="market-small-label">Open a candidate to check its year, set, number and parallel, then save the correct product ID below.</p>'+ (data.candidates||[]).map(c=>{const query=[c.set,c.title].filter(Boolean).join(' ');return '<p class="candidate-row"><a target="_blank" rel="noopener" href="https://www.sportscardspro.com/search-products?type=prices&q='+encodeURIComponent(query)+'">'+escapeHtml(c.id)+' ↗</a> — '+escapeHtml(c.set)+' · '+escapeHtml(c.title)+'</p>';}).join('')+'<p class="market-small-label">Candidate links open a SportsCardsPro search for that card.</p><form id="confirm-card-form"><label>SportsCardsPro ID<input id="confirmed-product-id" type="text" inputmode="numeric" pattern="[0-9]{1,15}" required value="'+escapeHtml(data.manualId||data.id||'')+'" placeholder="e.g. 6116541"></label><button class="button primary" type="submit">Save card ID</button><p id="confirmation-status" role="status">'+(data.manualId?'Saved ID: '+escapeHtml(data.manualId):'')+'</p></form>';
+ panel.innerHTML='<details class="match-details"><summary>'+(data.id||data.manualId?'Card match':'Confirm this card')+'</summary><p class="market-small-label">Open a candidate to check its year, set, number and parallel, then save the correct product ID below.</p>'+ (data.candidates||[]).map(c=>{const query=[c.set,c.title].filter(Boolean).join(' ');return '<p class="candidate-row"><a target="_blank" rel="noopener" href="https://www.sportscardspro.com/search-products?type=prices&q='+encodeURIComponent(query)+'">'+escapeHtml(c.id)+' ↗</a> — '+escapeHtml(c.set)+' · '+escapeHtml(c.title)+'</p>';}).join('')+'<p class="market-small-label">Candidate links open a SportsCardsPro search for that card.</p><form id="confirm-card-form"><label>SportsCardsPro ID<input id="confirmed-product-id" type="text" inputmode="numeric" pattern="[0-9]{1,15}" required value="'+escapeHtml(data.manualId||data.id||'')+'" placeholder="e.g. 6116541"></label><button class="button primary" type="submit">Save card ID</button><p id="confirmation-status" role="status">'+(data.manualId?'Saved ID: '+escapeHtml(data.manualId):'')+'</p></form></details>';
  const form=$('confirm-card-form');form.onsubmit=async event=>{event.preventDefault();const password=requestAdminPassword();if(!password)return;const id=form.querySelector('input').value.trim();const status=form.querySelector('[role=status]'),button=form.querySelector('button');button.disabled=true;status.textContent='Saving…';
  try{const r=await fetch('/.netlify/functions/confirm-card',{method:'POST',headers:{'content-type':'application/json','x-catalog-admin':password},body:JSON.stringify({key:marketKey(rows[index]),id})});const result=await r.json();if(!r.ok){if(r.status===401)sessionStorage.removeItem('football-card-admin-password');throw Error(result.error||'Could not save ID.');}const key=marketKey(rows[index]);const old=marketGridSummaries[key]||{};marketGridSummaries[key]={...old,manualId:id,...(old.id===id?{}:{id:'',ungraded:null,history:[],checkedAt:null,state:'pending',reason:'ID saved. Waiting for the next pricing batch.'})};status.textContent='Saved permanently. The next scheduled pricing batch will use this ID.';render();if(activeDetailIndex===index)loadMarketData(index);
  }catch(e){status.textContent=e.message;}finally{button.disabled=false;}};
@@ -1622,6 +1625,7 @@ async function loadCards() {
 
     rows = inheritPlayerNames(sourceRows);
 
+    await loadManualGradeIndex();
     updateStats();
     setOptions("year-filter", rows.map(r=>field(r,"year")), "All years");
 
@@ -1719,12 +1723,15 @@ $('all-cards-tab').onclick=()=>setWatchlist(false);
 $('unconfirmed-tab').onclick=()=>{setWatchlist(false);unconfirmedOnly=true;$('all-cards-tab').classList.remove('active');$('unconfirmed-tab').classList.add('active');$('collection-title').textContent='Unconfirmed cards';render();};
 for(const [id,label] of [['year-filter','Year'],['sort','Sort by'],['page-size','Show']]){const wrap=document.createElement('label');wrap.className='sidebar-field';wrap.textContent=label;wrap.appendChild($(id));$('sidebar-filters').appendChild(wrap);}
 const grades=['7','8','9','9.5','PSA 10'];
+let manualGradeEntries={},manualGradesReady=false;
+async function loadManualGradeIndex(){try{const r=await fetch('/.netlify/functions/manual-grade-index',{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error();manualGradeEntries=d.entries||{};manualGradesReady=true;}catch{manualGradesReady=false;}}
 async function loadManualGrades(index){
- const panel=$('manual-grades');const key=marketKey(rows[index]);
+ const panel=$('manual-grades'),key=marketKey(rows[index]);
  try{const r=await fetch('/.netlify/functions/manual-grades?key='+encodeURIComponent(key),{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||'Could not read saved prices.');if(panel!==$('manual-grades'))return;
- panel.innerHTML='<h3>My graded prices</h3><p class="market-small-label">Your estimates in USD. Saved to the catalog; automatic price updates never replace them.</p><form id="manual-grade-form"><div class="manual-grade-grid">'+grades.map(g=>'<label>'+escapeHtml(g==='PSA 10'?g:'Grade '+g)+'<input type="number" min="0" max="100000000" step="0.01" data-grade="'+g+'" aria-label="'+g+' price" placeholder="—" value="'+escapeHtml(d.prices?.[g]??'')+'"></label>').join('')+'</div><button class="button primary" type="submit">Save graded prices</button><span id="manual-grade-status" role="status"></span></form>';
- const form=$('manual-grade-form');form.onsubmit=async event=>{event.preventDefault();const password=requestAdminPassword();if(!password)return;const button=form.querySelector('button');button.disabled=true;const status=form.querySelector('[role=status]');status.textContent='Saving…';try{const prices={};form.querySelectorAll('[data-grade]').forEach(input=>{prices[input.dataset.grade]=input.value===''?null:Number(input.value);});const result=await fetch('/.netlify/functions/manual-grades',{method:'POST',headers:{'content-type':'application/json','x-catalog-admin':password},body:JSON.stringify({key,prices})});const data=await result.json();if(!result.ok){if(result.status===401)sessionStorage.removeItem('football-card-admin-password');throw Error(data.error||'Save failed.');}status.textContent='Saved permanently. Blank fields are cleared.';}catch(e){status.textContent=e.message;}finally{button.disabled=false;}};
- }catch(e){if(panel===$('manual-grades')){panel.innerHTML='<h3>My graded prices</h3><p>'+escapeHtml(e.message)+'</p><button class="button" onclick="loadManualGrades('+index+')">Retry</button>';}}
+ manualGradeEntries[key]=d;applyGridMarketSummaries();updateStats();
+ panel.innerHTML='<h3>My graded prices</h3><p class="market-small-label">Choose one grade to show beside the ungraded value. Apply it to use that price for every copy of this card in the collection total.</p><form id="manual-grade-form"><div class="manual-grade-grid">'+grades.map(g=>'<label><span class="grade-choice"><input type="radio" name="selected-grade" value="'+g+'" '+(d.selectedGrade===g?'checked':'')+' aria-label="Show '+g+' on card">'+escapeHtml(g==='PSA 10'?g:'Grade '+g)+'</span><input type="number" min="0" max="100000000" step="0.01" data-grade="'+g+'" aria-label="'+g+' price" placeholder="—" value="'+escapeHtml(d.prices?.[g]??'')+'"></label>').join('')+'</div><label class="no-grade-choice"><input type="radio" name="selected-grade" value="" '+(!d.selectedGrade?'checked':'')+'> No grade displayed</label><div class="grade-save-actions"><button class="button primary" type="submit">Save graded prices</button><button class="button secondary" type="submit" data-grade-action="apply">Apply selected grade to collection value</button><button class="button secondary" type="submit" data-grade-action="reset">Use ungraded in total</button></div><span id="manual-grade-status" role="status">'+(d.applyToCollection?'Collection total uses '+escapeHtml(d.selectedGrade)+'.':'Collection total uses the ungraded price.')+'</span></form>';
+ const form=$('manual-grade-form');form.onsubmit=async event=>{event.preventDefault();const password=requestAdminPassword();if(!password)return;const buttons=[...form.querySelectorAll('button')];buttons.forEach(b=>b.disabled=true);const status=form.querySelector('[role=status]');status.textContent='Saving…';try{const prices={};form.querySelectorAll('[data-grade]').forEach(input=>prices[input.dataset.grade]=input.value===''?null:Number(input.value));const selectedGrade=form.querySelector('[name=selected-grade]:checked')?.value||null;const action=event.submitter?.dataset.gradeAction;const applyToCollection=action==='apply'?true:action==='reset'?false:Boolean(d.applyToCollection)&&Boolean(selectedGrade);if(applyToCollection&&!selectedGrade)throw Error('Select a grade first.');if(selectedGrade&&prices[selectedGrade]===null)throw Error('Enter a price for the selected grade.');const response=await fetch('/.netlify/functions/manual-grades',{method:'POST',headers:{'content-type':'application/json','x-catalog-admin':password},body:JSON.stringify({key,prices,selectedGrade,applyToCollection})});const result=await response.json();if(!response.ok){if(response.status===401)sessionStorage.removeItem('football-card-admin-password');throw Error(result.error||'Save failed.');}Object.assign(d,result);manualGradeEntries[key]=result;if(!manualGradesReady)await loadManualGradeIndex();applyGridMarketSummaries();updateStats();status.textContent='Saved. '+(result.applyToCollection?'Collection total uses '+result.selectedGrade+'.':'Collection total uses the ungraded price.');}catch(e){status.textContent=e.message;}finally{buttons.forEach(b=>b.disabled=false);}};
+ }catch(e){if(panel===$('manual-grades'))panel.innerHTML='<h3>My graded prices</h3><p>'+escapeHtml(e.message)+'</p><button class="button" onclick="loadManualGrades('+index+')">Retry</button>';}
 }
 
 loadCards();

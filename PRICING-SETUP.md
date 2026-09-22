@@ -1,3 +1,15 @@
+# v36 — Selected graded prices and collection valuation
+
+Deploy all supplied files to your existing Netlify site, including the new manual-grade-index function. No new environment variables or subscriptions are needed.
+
+In My graded prices, select one grade and enter its price. Save graded prices persists the selection and shows that grade beside the ungraded price on the main card. Apply selected grade to collection value saves the form and uses the selected price instead of the ungraded price in the total. Use ungraded in total saves the form and restores ungraded valuation while retaining the grade display selection. No grade displayed clears the selection and restores ungraded valuation. Once a graded override is active, subsequent saved changes to its selected grade/price update the total too.
+
+Prices are per copy: the selected value is multiplied by the Sheet quantity for that catalog entry. This is an estimate override, not a claim that the physical cards are graded. The main total is labeled Collection Value. Value sorting continues to use ungraded prices. Existing graded prices remain intact; old records default to no selection and ungraded valuation. Selections and apply settings persist in the same server-side record as the prices. The collection total reports Unavailable if grade selections fail to load, instead of silently showing an incomplete total; Refresh Sheet retries.
+
+Card Match is now collapsed by default; click its heading to reveal candidates and the ID form.
+
+Validation: 23 existing tests passed. Simulated UI tests passed for selected-grade display, quantity-aware totals, reset, reload, failed-save isolation and collapsed Card Match. Live Netlify persistence and visual browser verification were not available during this update.
+
 # v35 — Stop one missing card from blocking market sync
 
 Deploy the supplied files to your existing Netlify site, then click Sync Market once. No key changes are needed. Existing prices, manual confirmations, graded prices and images remain in their existing stores.
