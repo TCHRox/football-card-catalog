@@ -1,3 +1,18 @@
+# v32 — Light archive, watchlist and manual graded prices
+
+Deploy all supplied files through the same Netlify build. Keep your existing Netlify site: pricing history, custom images and sync progress remain in their existing stores. No new environment variables or subscriptions are required.
+
+- Light storefront layout inspired by the supplied reference; filters in a sidebar, responsive mobile layout, existing Sheet/image/pricing/pagination controls retained.
+- Heart buttons add cards to Watchlist. Watchlist persists in this browser on this site; it does not sync between devices and clearing browser data removes it.
+- In each popup, enter Grade 7, 8, 9, 9.5 and PSA 10 estimates, then Save graded prices. Your catalog admin password is required. These USD values save in a separate Netlify Blobs store and survive reloads, browser changes and redeploys on the same Netlify site. Weekly updates never overwrite them. Blank fields clear an estimate. Values are manual estimates, not SportsCardsPro graded data, and do not change the ungraded collection total.
+- Saved card metadata uses the same normalized identity as market prices (player, year, set, card number, type, rookie and notes). Reordering or adding Sheet rows does not move saved values to another card; changing identity fields creates a different identity. Keep the original identity if you want to retain its saved values.
+- Recent sales use compact date/title/price rows within a scrollable panel. Actual listing URLs are used when returned; otherwise a clearly labeled Search sold listings link opens eBay search, not an asserted exact match.
+- Manual values are never marked saved unless the server confirms success. A storage error leaves the form available to retry.
+
+Validation: existing pricing tests, manual-price validation/authentication checks and UI integration checks. Production persistence requires deployment to Netlify; no production credentials were available during development.
+
+Previous setup details follow.
+
 # v31.1 — Recent sales restored
 
 Recent sales are available inside each card popup with **Load recent sales**. Restore/keep `PARSE_API_KEY` as a secret available to production Functions. `SERPER_API_KEY` helps discover cards. Requests use your existing Parse service and its credits, separately from SportsCardsPro. Provider access was not live-tested. Deploy the supplied files through your existing Netlify build. SportsCardsPro weekly pricing and saved history are unchanged.

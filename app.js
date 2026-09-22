@@ -437,6 +437,7 @@ function searchable(row) {
 
 function filteredRows() {
   let filtered = [...rows];
+  if(watchlistOnly) filtered=filtered.filter(r=>watchlist.has(marketKey(r)));
   const q = norm($("search").value);
   const year = $("year-filter").value;
 
@@ -746,7 +747,7 @@ function render() {
     const sub = subtitle(row);
     return `
       <article class="card card-clickable" data-index="${realIndex}" tabindex="0" role="button" aria-label="View details for ${escapeHtml(titleFor(row))}">
-        <div class="card-image-wrap">
+        <div class="card-image-wrap"><button class="favorite-button ${watchlist.has(marketKey(row))?'selected':''}" data-favorite="${realIndex}" aria-label="Toggle watchlist for ${escapeHtml(titleFor(row))}" aria-pressed="${watchlist.has(marketKey(row))}">${watchlist.has(marketKey(row))?'♥':'♡'}</button>
           ${imageHtml(row, realIndex, false)}
           ${isRookie(row) ? '<span class="grade-badge">RC</span>' : ""}
         </div>
@@ -767,16 +768,19 @@ function render() {
   $("empty-state").classList.toggle("hidden", totalEntries > 0);
 
   document.querySelectorAll(".card-clickable").forEach(cardEl => {
-    const openCard = () => openDetails(Number(cardEl.dataset.index));
+    const openCard = event => {if(event.target.closest("[data-favorite]"))return;openDetails(Number(cardEl.dataset.index));};
     cardEl.addEventListener("click", openCard);
     cardEl.addEventListener("keydown", (event) => {
+      if(event.target.closest("[data-favorite]"))return;
       if (event.key === "Enter" || event.key === " ") {
         event.preventDefault();
-        openCard();
+        openCard(event);
       }
     });
   });
 
+  document.querySelectorAll("[data-favorite]").forEach(button=>button.addEventListener("click",event=>{event.stopPropagation();toggleFavorite(Number(button.dataset.favorite));}));
+  $("watchlist-count").textContent=watchlist.size;
   renderPagination(totalPages, totalEntries);
   setupAutoImageLoading();
 }
@@ -1458,7 +1462,8 @@ function recentSalesPanel(index) {
     const raw=String(sale.url||sale.link||'');
     let safe='';try{const u=new URL(raw);if(u.protocol==='https:'||u.protocol==='http:')safe=u.href;}catch{}
     const title=escapeHtml(sale.title||'Completed sale');
-    return '<article class="sale-row"><div>'+(safe?'<a href="'+escapeHtml(safe)+'" target="_blank" rel="noopener noreferrer">'+title+' ↗</a>':title)+'</div><div>'+escapeHtml(sale.date||'')+' · '+escapeHtml(marketMoney(Number(sale.numericPrice??sale.price)))+'</div></article>';
+    const href=safe||'https://www.ebay.com/sch/i.html?LH_Sold=1&LH_Complete=1&_nkw='+encodeURIComponent(sale.title||'');
+    return '<article class="sale-row compact-sale"><time>'+escapeHtml(String(sale.date||'').slice(0,10))+'</time><a class="sale-title-link" href="'+escapeHtml(href)+'" target="_blank" rel="noopener noreferrer" title="'+title+'">'+title+'<span class="sale-link-note">'+(safe?'View listing ↗':'Search sold listings ↗')+'</span></a><strong>'+escapeHtml(marketMoney(Number(sale.numericPrice??sale.price)))+'</strong></article>' ;
   }).join('')+'</div>';
 }
 async function loadRecentSales(index) {
@@ -1543,13 +1548,14 @@ function renderDetailContent(index) {
         </section>
       </aside>
 
-      <main class="market-detail-main">
+      <main class="market-detail-main"><section id="manual-grades" class="market-panel"><h3>My graded prices</h3><p>Loading saved prices…</p></section>
         <div id="market-content">
           <p>Loading saved prices…</p>
         </div>
       </main>
     </div>`;
 
+  loadManualGrades(index);
   attachCustomEditorEvents(index);
   loadMarketData(index);
 }
@@ -1657,6 +1663,7 @@ $("page-size").addEventListener("change", () => {
 });
 
 $("clear-filters").addEventListener("click", () => {
+  setWatchlist(false);
   $("search").value = "";
   $("year-filter").value = "";
   $("sort").value = "sheet";
@@ -1688,5 +1695,21 @@ document.addEventListener("paste", event => {
   event.preventDefault();
   uploadCustomImage(activeDetailIndex, file);
 });
+
+let watchlistOnly=false;
+let watchlist;try{watchlist=new Set(JSON.parse(localStorage.getItem('football-watchlist-v1')||'[]'));}catch{watchlist=new Set();}
+function toggleFavorite(index){const key=marketKey(rows[index]);const next=new Set(watchlist);next.has(key)?next.delete(key):next.add(key);try{localStorage.setItem('football-watchlist-v1',JSON.stringify([...next]));watchlist=next;render();}catch{alert('Your browser could not save the watchlist. Check browser storage settings.');}}
+function setWatchlist(only){watchlistOnly=only;currentPage=1;$('watchlist-tab').classList.toggle('active',only);$('all-cards-tab').classList.toggle('active',!only);$('collection-title').textContent=only?'Watchlist':'All cards';render();}
+$('watchlist-tab').onclick=()=>setWatchlist(true);
+$('all-cards-tab').onclick=()=>setWatchlist(false);
+for(const [id,label] of [['year-filter','Year'],['sort','Sort by'],['page-size','Show']]){const wrap=document.createElement('label');wrap.className='sidebar-field';wrap.textContent=label;wrap.appendChild($(id));$('sidebar-filters').appendChild(wrap);}
+const grades=['7','8','9','9.5','PSA 10'];
+async function loadManualGrades(index){
+ const panel=$('manual-grades');const key=marketKey(rows[index]);
+ try{const r=await fetch('/.netlify/functions/manual-grades?key='+encodeURIComponent(key),{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error(d.error||'Could not read saved prices.');if(panel!==$('manual-grades'))return;
+ panel.innerHTML='<h3>My graded prices</h3><p class="market-small-label">Your estimates in USD. Saved to the catalog; automatic price updates never replace them.</p><form id="manual-grade-form"><div class="manual-grade-grid">'+grades.map(g=>'<label>'+escapeHtml(g==='PSA 10'?g:'Grade '+g)+'<input type="number" min="0" max="100000000" step="0.01" data-grade="'+g+'" aria-label="'+g+' price" placeholder="—" value="'+escapeHtml(d.prices?.[g]??'')+'"></label>').join('')+'</div><button class="button primary" type="submit">Save graded prices</button><span id="manual-grade-status" role="status"></span></form>';
+ const form=$('manual-grade-form');form.onsubmit=async event=>{event.preventDefault();const password=requestAdminPassword();if(!password)return;const button=form.querySelector('button');button.disabled=true;const status=form.querySelector('[role=status]');status.textContent='Saving…';try{const prices={};form.querySelectorAll('[data-grade]').forEach(input=>{prices[input.dataset.grade]=input.value===''?null:Number(input.value);});const result=await fetch('/.netlify/functions/manual-grades',{method:'POST',headers:{'content-type':'application/json','x-catalog-admin':password},body:JSON.stringify({key,prices})});const data=await result.json();if(!result.ok){if(result.status===401)sessionStorage.removeItem('football-card-admin-password');throw Error(data.error||'Save failed.');}status.textContent='Saved permanently. Blank fields are cleared.';}catch(e){status.textContent=e.message;}finally{button.disabled=false;}};
+ }catch(e){if(panel===$('manual-grades')){panel.innerHTML='<h3>My graded prices</h3><p>'+escapeHtml(e.message)+'</p><button class="button" onclick="loadManualGrades('+index+')">Retry</button>';}}
+}
 
 loadCards();
