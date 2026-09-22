@@ -4,10 +4,8 @@ const CONFIG = {
   imageManifest: "/card-images.json",
   imageBatchEndpoint: "/.netlify/functions/card-images-batch",
   customImageEndpoint: "/.netlify/functions/custom-card-image",
-  marketEndpoint: "/.netlify/functions/card-market",
-  marketSalesEndpoint: "/.netlify/functions/card-market-sales",
-  marketIndexEndpoint: "/.netlify/functions/cardsight-market-index",
-  marketSyncEndpoint: "/.netlify/functions/cardsight-sync-start",
+  marketIndexEndpoint: "/.netlify/functions/scp-market-index",
+  marketSyncEndpoint: "/.netlify/functions/scp-sync-start",
   imageCacheStorageKey: "football-card-archive-image-cache-v5",
   imageBatchSize: 8,
   imageBatchConcurrency: 2,
@@ -72,8 +70,6 @@ let pageSize = 250;
 let currentPageRows = [];
 let activeDetailIndex = null;
 let customEditorOpen = false;
-const marketDataCache = new Map();
-const marketGradeByCard = new Map();
 let marketGridSummaries = {};
 let marketSyncStatus = {};
 let marketPollTimer = null;
@@ -247,6 +243,15 @@ function cardKey(row) {
     cardTypeFor(row),
     isRookie(row) ? "rookie" : ""
   ].map(v => norm(v)).join("|");
+}
+
+function marketKey(row) {
+  return `${cardKey(row)}|${norm(field(row, "notes"))}`;
+}
+
+function priceOrNaN(value) {
+  return value !== null && value !== undefined && value !== "" && Number(value) > 0
+    ? Number(value) : NaN;
 }
 
 function loadStoredImageCache() {
@@ -450,8 +455,8 @@ function filteredRows() {
       break;
     case "value-desc":
       filtered.sort((a,b) => {
-        const av = Number(marketGridSummaries[cardKey(a)]?.ungraded);
-        const bv = Number(marketGridSummaries[cardKey(b)]?.ungraded);
+        const av = priceOrNaN(marketGridSummaries[marketKey(a)]?.ungraded);
+        const bv = priceOrNaN(marketGridSummaries[marketKey(b)]?.ungraded);
         const aValid = Number.isFinite(av);
         const bValid = Number.isFinite(bv);
 
@@ -463,8 +468,8 @@ function filteredRows() {
       break;
     case "value-asc":
       filtered.sort((a,b) => {
-        const av = Number(marketGridSummaries[cardKey(a)]?.ungraded);
-        const bv = Number(marketGridSummaries[cardKey(b)]?.ungraded);
+        const av = priceOrNaN(marketGridSummaries[marketKey(a)]?.ungraded);
+        const bv = priceOrNaN(marketGridSummaries[marketKey(b)]?.ungraded);
         const aValid = Number.isFinite(av);
         const bValid = Number.isFinite(bv);
 
@@ -549,23 +554,8 @@ function compactMarketValue(value) {
 }
 
 function gridMarketHtml(summary) {
-  const data = summary || {};
-  const changes = data.changes || {};
-
-  const row = (label, value, change) => `
-    <div class="card-market-row">
-      <span class="card-market-grade">${label}</span>
-      <strong class="card-market-price">${compactMarketValue(value)}</strong>
-      ${marketChangeHtml(change, true)}
-    </div>`;
-
-  return `
-    <div class="card-market-heading">Market value</div>
-    <div class="card-market-values">
-      ${row("Raw", data.ungraded, changes.ungraded)}
-      ${row("PSA 9", data.psa9 ?? data.grade9, changes.psa9 ?? changes.grade9)}
-      ${row("PSA 10", data.psa10, changes.psa10)}
-    </div>`;
+  const data=summary||{};
+  return `<div class="card-market-heading">Ungraded value</div><div class="card-market-row"><strong class="card-market-price">${compactMarketValue(data.ungraded)}</strong></div><div class="market-small-label">${data.state === "review" ? "Match needs review" : data.checkedAt ? `Checked ${new Date(data.checkedAt).toLocaleDateString()}` : "Awaiting sync"}</div>`;
 }
 
 function applyGridMarketSummaries() {
@@ -608,155 +598,14 @@ function marketDateLabel(value) {
 }
 
 function renderMarketSyncStatus() {
-  const status = marketSyncStatus || {};
-  const progressWrap = $("market-progress-wrap");
-  const progressBar = $("market-progress-bar");
-  const progressDetail = $("market-progress-detail");
-  const syncButton = $("market-sync-btn");
-
-  const hideProgress = () => {
-    progressWrap?.classList.add("hidden");
-    if (progressBar) progressBar.style.width = "0%";
-    if (progressDetail) progressDetail.textContent = "";
-  };
-
-  const showProgress = (percent, detail) => {
-    progressWrap?.classList.remove("hidden");
-    if (progressBar) {
-      progressBar.style.width = `${Math.max(0, Math.min(100, percent))}%`;
-    }
-    if (progressDetail) progressDetail.textContent = detail;
-  };
-
-  if (syncButton) {
-    syncButton.disabled = Boolean(status.running || status.phase === "queued");
-    syncButton.textContent = status.running || status.phase === "queued"
-      ? "Syncing Market…"
-      : "Sync Market";
-  }
-
-  if (!status.configured) {
-    hideProgress();
-    setMarketProviderStatus(
-      "error",
-      status.error || "Market values need CARDSIGHTAI_API_KEY in Netlify."
-    );
-    return;
-  }
-
-  if (status.phase === "error" || status.error) {
-    hideProgress();
-
-    const matched = Number(status.matchedRows || 0).toLocaleString();
-    const valued = Number(status.valuedRows || 0).toLocaleString();
-    const apiCalls = Number(status.apiCallsThisRun || 0).toLocaleString();
-
-    setMarketProviderStatus(
-      "error",
-      `Market sync stopped: ${status.error || "Unknown error"} · ${matched} matched · ${valued} valued · ${apiCalls} API calls this run`
-    );
-    return;
-  }
-
-  if (status.phase === "queued") {
-    setMarketProviderStatus(
-      "searching",
-      "Market sync queued. Starting background job…"
-    );
-    showProgress(1, "Starting…");
-    return;
-  }
-
-  if (status.running) {
-    const total = Number(status.totalRows || rows.length || 0);
-    const matched = Number(status.matchedRows || 0);
-    const unresolved = Number(status.unresolvedRows || 0);
-    const pending = Number(
-      status.pendingRows ??
-      Math.max(0, total - matched - unresolved)
-    );
-    const valued = Number(status.valuedRows || 0);
-    const apiCalls = Number(status.apiCallsThisRun || 0);
-
-    if (status.phase === "matching") {
-      const done = Number(status.matchGroupsProcessed || 0);
-      const groupTotal = Number(status.matchGroupsTotal || 0);
-      const pct = groupTotal ? (done / groupTotal) * 100 : 0;
-
-      setMarketProviderStatus(
-        "searching",
-        status.phaseLabel || "Matching cards to CardSight"
-      );
-
-      showProgress(
-        pct,
-        `${done.toLocaleString()} / ${groupTotal.toLocaleString()} player-year groups · ` +
-        `${matched.toLocaleString()} matched · ${unresolved.toLocaleString()} unmatched · ` +
-        `${pending.toLocaleString()} pending · ${valued.toLocaleString()} valued · ` +
-        `${apiCalls.toLocaleString()} API calls`
-      );
-      return;
-    }
-
-    if (status.phase === "pricing") {
-      const done = Number(status.priceIdsProcessed || 0);
-      const priceTotal = Number(status.priceIdsTotal || 0);
-      const pct = priceTotal ? (done / priceTotal) * 100 : 0;
-
-      setMarketProviderStatus(
-        "searching",
-        status.phaseLabel || "Refreshing market prices"
-      );
-
-      showProgress(
-        pct,
-        `${done.toLocaleString()} / ${priceTotal.toLocaleString()} matched card IDs priced · ` +
-        `${valued.toLocaleString()} catalog entries valued · ` +
-        `${apiCalls.toLocaleString()} API calls`
-      );
-      return;
-    }
-
-    setMarketProviderStatus(
-      "searching",
-      status.phaseLabel || "Market sync in progress"
-    );
-    showProgress(
-      Number(status.progressPercent || 0),
-      `${matched.toLocaleString()} matched · ${valued.toLocaleString()} valued`
-    );
-    return;
-  }
-
-  hideProgress();
-
-  const matched = Number(status.matchedRows || 0);
-  const valued = Number(status.valuedRows || 0);
-  const total = Number(status.totalRows || rows.length || 0);
-  const unresolved = Number(status.unresolvedRows || 0);
-  const pending = Number(
-    status.pendingRows ??
-    Math.max(0, total - matched - unresolved)
-  );
-  const refreshed = marketDateLabel(
-    status.lastPriceRefreshAt || status.lastCompletedAt
-  );
-
-  if (!matched && !valued) {
-    setMarketProviderStatus(
-      "connected",
-      "CardSight is connected. Click Sync Market to build the initial value database."
-    );
-    return;
-  }
-
-  const updatedCopy = refreshed ? ` · refreshed ${refreshed}` : "";
-
-  setMarketProviderStatus(
-    "connected",
-    `${valued.toLocaleString()} valued · ${matched.toLocaleString()}/${total.toLocaleString()} matched · ` +
-    `${unresolved.toLocaleString()} unmatched · ${pending.toLocaleString()} pending${updatedCopy}`
-  );
+  const s=marketSyncStatus||{}; const button=$("market-sync-btn");
+  if(button){button.disabled=Boolean(s.running);button.textContent=s.running?"Syncing…":"Sync Market";}
+  $("market-progress-wrap")?.classList.toggle("hidden",!s.running);
+  const total=Number(s.totalRows||rows.length||0), valued=Number(s.valuedRows||0), review=Number(s.unresolvedRows||0), due=Number(s.dueRows||0);
+  if($("market-progress-bar"))$("market-progress-bar").style.width=`${total ? Math.min(100,100*Number(s.matchedRows||0)/total):0}%`;
+  if($("market-progress-detail"))$("market-progress-detail").textContent=`${Number(s.priceIdsProcessed||0)} processed this batch · ${Number(s.apiCallsThisRun||0)} API requests`;
+  const detail=!s.configured?"Add SPORTSCARDSPRO_API_TOKEN to production Functions, then deploy v31.":s.error?s.error:s.running?"Updating SportsCardsPro prices. You can close this page.":`${valued.toLocaleString()} of ${total.toLocaleString()} rows valued · ${review.toLocaleString()} need review · ${due.toLocaleString()} due${s.phase==='partial'?' · Automatically resumes within ten minutes':''}`;
+  setMarketProviderStatus(!s.configured||s.error?"error":s.running?"syncing":"connected",detail);
 }
 async function loadPersistentMarketIndex({ rerender = false } = {}) {
   try {
@@ -775,10 +624,11 @@ async function loadPersistentMarketIndex({ rerender = false } = {}) {
 
     renderMarketSyncStatus();
     updateStats();
+    if(activeDetailIndex !== null && $("card-dialog")?.open)loadMarketData(activeDetailIndex);
 
     if (rerender) render();
 
-    if (marketSyncStatus.running) {
+    if (marketSyncStatus.running || marketSyncStatus.phase === "partial") {
       scheduleMarketPoll();
     } else if (marketPollTimer) {
       clearTimeout(marketPollTimer);
@@ -906,8 +756,8 @@ function render() {
           ${sub ? `<div class="card-subtitle">${escapeHtml(sub)}</div>` : ""}
           <div class="card-bottom card-bottom-market">
             <div class="card-market-block"
-              data-grid-market-key="${escapeHtml(cardKey(row))}">
-              ${gridMarketHtml(marketGridSummaries[cardKey(row)])}
+              data-grid-market-key="${escapeHtml(marketKey(row))}">
+              ${gridMarketHtml(marketGridSummaries[marketKey(row)])}
             </div>
           </div>
         </div>
@@ -948,7 +798,7 @@ function updateStats() {
   let valuedCopies = 0;
 
   for (const row of rows) {
-    const rawValue = Number(marketGridSummaries[cardKey(row)]?.ungraded);
+    const rawValue = priceOrNaN(marketGridSummaries[marketKey(row)]?.ungraded);
     if (!Number.isFinite(rawValue)) continue;
 
     const qty = quantity(row);
@@ -1473,46 +1323,6 @@ function marketMoney(value) {
   }).format(n);
 }
 
-function marketQuery(row) {
-  const params = new URLSearchParams({
-    player: fullName(row),
-    year: field(row, "year"),
-    brand: brandFor(row),
-    type: cardTypeFor(row),
-    number: field(row, "cardNumber"),
-    rookie: isRookie(row) ? "Y" : "N",
-    notes: field(row, "notes")
-  });
-
-  // Reuse a SportsCardsPro page already discovered by the image search.
-  // This can completely skip the slower card-discovery step.
-  const autoImage = getCachedAutoImageData(cardKey(row));
-  const sourcePage = String(autoImage?.sourcePage || "");
-
-  if (/sportscardspro\.com\/game\//i.test(sourcePage)) {
-    params.set("preferredUrl", sourcePage);
-  }
-
-  return params;
-}
-
-function renderMarketLoading() {
-  return `
-    <section class="market-panel market-loading">
-      <div class="market-loading-head">
-        <div>
-          <div class="section-kicker">MARKET DATA</div>
-          <h3>Loading SportsCardsPro history…</h3>
-        </div>
-        <span class="market-spinner" aria-hidden="true"></span>
-      </div>
-      <div class="market-skeleton chart-skeleton"></div>
-      <div class="grade-skeleton-row">
-        ${Array.from({length: 6}, () => '<div class="market-skeleton grade-skeleton"></div>').join("")}
-      </div>
-    </section>`;
-}
-
 function chartSvg(points) {
   const clean = (points || [])
     .map(s => ({
@@ -1531,7 +1341,7 @@ function chartSvg(points) {
     return `
       <div class="no-chart">
         <strong>Not enough historical data for a chart yet.</strong>
-        <span>Grade values and recent sales may still be available below.</span>
+        <span>Weekly price snapshots will appear here.</span>
       </div>`;
   }
 
@@ -1637,501 +1447,15 @@ function chartSvg(points) {
     </svg>`;
 }
 
-function preferredGradeCards(prices) {
-  const order = [
-    "Ungraded",
-    "Grade 8",
-    "Grade 9",
-    "Grade 9.5",
-    "SGC 10",
-    "CGC 10",
-    "PSA 10",
-    "BGS 10",
-    "BGS 10 Black",
-    "CGC 10 Pristine",
-    "TAG 10",
-    "ACE 10"
-  ];
-
-  const byLabel = new Map((prices || []).map(p => [p.label, p]));
-  const ordered = order.map(label => byLabel.get(label)).filter(Boolean);
-
-  for (const item of prices || []) {
-    if (!ordered.some(existing => existing.label === item.label)) {
-      ordered.push(item);
-    }
-  }
-
-  return ordered.slice(0, 8);
-}
-
-function filterTrendToOneYear(points) {
-  const sorted = (points || [])
-    .filter(p => Number.isFinite(Date.parse(p.date)))
-    .sort((a,b) => Date.parse(a.date) - Date.parse(b.date));
-
-  if (!sorted.length) return [];
-
-  const newest = Date.parse(sorted[sorted.length - 1].date);
-  const cutoff = new Date(newest);
-  cutoff.setFullYear(cutoff.getFullYear() - 1);
-
-  return sorted.filter(p => Date.parse(p.date) >= cutoff.getTime());
-}
-
-function trendPercentChange(points) {
-  const oneYear = filterTrendToOneYear(points)
-    .map(point => ({
-      ...point,
-      numericPrice: Number(
-        point.numericPrice !== undefined && point.numericPrice !== null
-          ? point.numericPrice
-          : String(point.price || "").replace(/[$,]/g, "")
-      )
-    }))
-    .filter(point => Number.isFinite(point.numericPrice))
-    .sort((a,b) => Date.parse(a.date) - Date.parse(b.date));
-
-  if (oneYear.length < 2) return null;
-
-  const first = oneYear[0].numericPrice;
-  const last = oneYear[oneYear.length - 1].numericPrice;
-
-  if (!Number.isFinite(first) || !Number.isFinite(last) || first === 0) return null;
-
-  return ((last - first) / first) * 100;
-}
-
-function marketChangeHtml(value, compact = false) {
-  const n = Number(value);
-  if (!Number.isFinite(n)) {
-    return compact
-      ? '<span class="market-change market-change-empty">—</span>'
-      : "";
-  }
-
-  const rounded = Math.abs(n) < .05 ? 0 : n;
-  const direction = rounded > 0 ? "up" : rounded < 0 ? "down" : "flat";
-  const arrow = rounded > 0 ? "↑" : rounded < 0 ? "↓" : "→";
-  const sign = rounded > 0 ? "+" : "";
-
-  return `<span class="market-change ${direction} ${compact ? "compact" : ""}">
-    <span class="market-change-arrow">${arrow}</span>
-    ${sign}${rounded.toFixed(1)}%
-  </span>`;
-}
-
-function trendPointsForPriceKey(trends, key, label = "") {
-  if (!trends) return [];
-
-  if (key === "ungraded" || label === "Ungraded") {
-    return trends.ungraded || trends.used || trends.raw || [];
-  }
-
-  return trends[key] || [];
-}
-
-function detailMarketSummary(data) {
-  if (!data?.found) return null;
-
-  const prices = data.prices || [];
-  const trends = data.trends || {};
-
-  const byKey = new Map(prices.map(item => [item.key, item]));
-  const byLabel = new Map(prices.map(item => [item.label, item]));
-
-  const raw = byKey.get("ungraded") || byLabel.get("Ungraded");
-  const grade9 = byKey.get("grade_9") || byLabel.get("Grade 9");
-  const psa10 = byKey.get("psa_10") || byLabel.get("PSA 10");
-
-  return {
-    ungraded: raw?.value ?? null,
-    grade9: grade9?.value ?? null,
-    psa10: psa10?.value ?? null,
-    changes: {
-      ungraded: trendPercentChange(
-        trendPointsForPriceKey(trends, raw?.key || "ungraded", "Ungraded")
-      ),
-      grade9: trendPercentChange(
-        trendPointsForPriceKey(trends, grade9?.key || "grade_9", "Grade 9")
-      ),
-      psa10: trendPercentChange(
-        trendPointsForPriceKey(trends, psa10?.key || "psa_10", "PSA 10")
-      )
-    },
-    source: "detail",
-    updatedAt: Date.now()
-  };
-}
-
-function trendGradeLabel(key) {
-  const labels = {
-    ungraded: "Ungraded",
-    used: "Ungraded",
-    raw: "Ungraded",
-    grade_7: "Grade 7",
-    grade_8: "Grade 8",
-    grade_9: "Grade 9",
-    grade_9_5: "Grade 9.5",
-    tag_10: "TAG 10",
-    ace_10: "ACE 10",
-    sgc_10: "SGC 10",
-    cgc_10: "CGC 10",
-    psa_10: "PSA 10",
-    bgs_10: "BGS 10",
-    bgs_10_black: "BGS 10 Black",
-    cgc_10_pristine: "CGC 10 Pristine"
-  };
-
-  return labels[key] ||
-    String(key || "")
-      .replace(/_/g, " ")
-      .replace(/\b\w/g, ch => ch.toUpperCase());
-}
-
-function preferredTrendGradeKeys(trends) {
-  const available = trends || {};
-  const preferred = [
-    "ungraded", "used", "raw",
-    "grade_7", "grade_8", "grade_9", "grade_9_5",
-    "psa_10", "sgc_10", "cgc_10", "bgs_10",
-    "tag_10", "ace_10", "bgs_10_black", "cgc_10_pristine"
-  ];
-
-  const result = [];
-  const seenLabels = new Set();
-
-  for (const key of preferred) {
-    if (!Array.isArray(available[key]) || available[key].length < 2) continue;
-
-    const label = trendGradeLabel(key);
-    // SportsCardsPro may expose the raw series as ungraded, used, or raw.
-    // Only show one "Ungraded" tab.
-    if (seenLabels.has(label)) continue;
-
-    seenLabels.add(label);
-    result.push(key);
-  }
-
-  // Include any other usable grade series the API may add later.
-  for (const [key, points] of Object.entries(available)) {
-    if (!Array.isArray(points) || points.length < 2) continue;
-    const label = trendGradeLabel(key);
-    if (seenLabels.has(label)) continue;
-    seenLabels.add(label);
-    result.push(key);
-  }
-
-  return result;
-}
-
-function defaultTrendGradeKey(trends) {
-  const keys = preferredTrendGradeKeys(trends);
-  return keys.find(key => ["ungraded", "used", "raw"].includes(key)) ||
-    keys[0] ||
-    "";
-}
-
-function trendDepthLabel(points) {
-  const sorted = (points || [])
-    .filter(p => Number.isFinite(Date.parse(p.date)))
-    .sort((a,b) => Date.parse(a.date) - Date.parse(b.date));
-
-  if (sorted.length < 2) return "";
-
-  const first = new Date(sorted[0].date);
-  const last = new Date(sorted[sorted.length - 1].date);
-  const months = Math.max(
-    1,
-    (last.getFullYear() - first.getFullYear()) * 12 +
-    last.getMonth() - first.getMonth()
-  );
-
-  if (months >= 24) return `${(months / 12).toFixed(1)} years of history`;
-  return `${months} months of history`;
-}
-
-function saleSearchUrl(sale) {
-  const direct = String(sale?.url || "").trim();
-  if (/^https?:\/\//i.test(direct)) return direct;
-
-  const title = String(sale?.title || "").trim();
-  if (!title) return "";
-
-  const marketplace = String(sale?.marketplace || "").toLowerCase();
-
-  if (!marketplace || marketplace.includes("ebay")) {
-    return `https://www.ebay.com/sch/i.html?_nkw=${encodeURIComponent(title)}&LH_Sold=1&LH_Complete=1`;
-  }
-
-  return `https://www.google.com/search?q=${encodeURIComponent(`${title} ${sale.marketplace || ""} sold`)}`;
-}
-
-function saleLinkLabel(sale) {
-  return sale?.url ? "Open sale" : "Find sale";
-}
-
-function renderMarketData(data, cardKeyValue) {
-  if (!data || !data.found) {
-    const needsSetup = data?.code === "PARSE_API_NOT_CONFIGURED";
-
-    return `
-      <section class="market-panel market-unavailable">
-        <div class="section-kicker">MARKET DATA</div>
-        <h3>${needsSetup ? "Market API needs setup" : "No reliable SportsCardsPro match found"}</h3>
-        <p>${escapeHtml(
-          data?.message ||
-          data?.error ||
-          "This card could not be matched confidently to SportsCardsPro."
-        )}</p>
-        ${needsSetup ? `
-          <div class="market-setup-help">
-            Add <code>PARSE_API_KEY</code> to Netlify Environment Variables,
-            make sure Functions can access it, then redeploy.
-          </div>` : ""}
-      </section>`;
-  }
-
-  const raw = (data.prices || []).find(p => p.label === "Ungraded");
-  const recent = data.sales || [];
-  const gradeCards = preferredGradeCards(data.prices);
-  const trendSeries = data.trends || {};
-  const availableTrendKeys = preferredTrendGradeKeys(trendSeries);
-  const storedGradeKey = marketGradeByCard.get(cardKeyValue) || "";
-  const selectedGradeKey = availableTrendKeys.includes(storedGradeKey)
-    ? storedGradeKey
-    : defaultTrendGradeKey(trendSeries);
-
-  if (selectedGradeKey) {
-    marketGradeByCard.set(cardKeyValue, selectedGradeKey);
-  }
-
-  const selectedTrend = selectedGradeKey
-    ? (trendSeries[selectedGradeKey] || [])
-    : (data.trend || []);
-
-  const chartPoints = filterTrendToOneYear(selectedTrend);
-  const selectedTrendChange = trendPercentChange(selectedTrend);
-  const selectedGradeLabel = selectedGradeKey
-    ? trendGradeLabel(selectedGradeKey)
-    : "Ungraded";
-
-  const avg = recent.length
-    ? recent.reduce((sum,s) => sum + Number(s.numericPrice || 0), 0) / recent.length
-    : null;
-
-  // Market value should always fall back to the ungraded/raw series,
-  // regardless of which grade tab is currently selected.
-  const ungradedTrend =
-    trendSeries.ungraded ||
-    trendSeries.used ||
-    trendSeries.raw ||
-    data.trend ||
-    [];
-
-  const latestTrendPoint = [...ungradedTrend]
-    .filter(p => Number.isFinite(Number(p.numericPrice)))
-    .sort((a,b) => Date.parse(a.date) - Date.parse(b.date))
-    .at(-1);
-
-  const marketValue = raw?.value ?? latestTrendPoint?.numericPrice ?? null;
-  const historyDepth = trendDepthLabel(selectedTrend);
-
-  return `
-    <section class="market-panel">
-      <div class="market-summary-row">
-        <div>
-          <div class="section-kicker">MARKET VALUE</div>
-          <div class="market-primary-value">${marketMoney(marketValue)}</div>
-          <div class="market-small-label">Current ungraded estimate</div>
-        </div>
-
-        <div class="market-mini-stat">
-          <span>Recent sales</span>
-          <strong>${recent.length || "—"}</strong>
-        </div>
-
-        <div class="market-mini-stat">
-          <span>Recent avg.</span>
-          <strong>${marketMoney(avg)}</strong>
-        </div>
-
-        <a class="source-link" href="${escapeHtml(data.sourceUrl || "https://www.sportscardspro.com/")}" target="_blank" rel="noopener">
-          SportsCardsPro ↗
-        </a>
-      </div>
-
-      <div class="market-chart-card">
-        <div class="market-section-heading chart-heading-with-controls">
-          <div>
-            <div class="section-kicker">PRICE HISTORY</div>
-            <div class="market-trend-title-row">
-              <h3>${escapeHtml(selectedGradeLabel)} · 1 year</h3>
-              ${marketChangeHtml(selectedTrendChange)}
-            </div>
-            ${historyDepth
-              ? `<span class="history-depth">${escapeHtml(historyDepth)} available for this grade</span>`
-              : ""}
-          </div>
-
-          ${availableTrendKeys.length ? `
-            <div class="chart-grade-controls" role="group" aria-label="Price history grade">
-              ${availableTrendKeys.map(key => `
-                <button type="button"
-                  class="chart-grade-button ${selectedGradeKey === key ? "active" : ""}"
-                  data-market-grade="${escapeHtml(key)}">
-                  ${escapeHtml(trendGradeLabel(key))}
-                </button>`).join("")}
-            </div>` : ""}
-
-        </div>
-
-        ${chartSvg(chartPoints)}
-      </div>
-
-      <div class="grade-section">
-        <div class="market-section-heading">
-          <div>
-            <div class="section-kicker">PRICE GUIDE</div>
-            <h3>Values by grade</h3>
-          </div>
-        </div>
-
-        ${gradeCards.length ? `
-          <div class="grade-price-grid">
-            ${gradeCards.map(item => {
-              const gradeChange = trendPercentChange(
-                trendPointsForPriceKey(trendSeries, item.key, item.label)
-              );
-
-              return `
-                <div class="grade-price-card">
-                  <span>${escapeHtml(item.label)}</span>
-                  <strong>${marketMoney(item.value)}</strong>
-                  ${marketChangeHtml(gradeChange, true)}
-                </div>`;
-            }).join("")}
-          </div>` : `
-          <div class="market-empty-copy">No grade-specific prices are currently available for this card.</div>
-        `}
-      </div>
-
-      <div class="recent-sales-section">
-        <div class="market-section-heading">
-          <div>
-            <div class="section-kicker">RECENT SALES</div>
-            <h3>Completed listings</h3>
-          </div>
-        </div>
-
-        ${recent.length ? `
-          <div class="sales-list">
-            ${recent.slice(0, 10).map(sale => {
-              const href = saleSearchUrl(sale);
-              return `
-                <a class="sale-row" href="${escapeHtml(href)}" target="_blank" rel="noopener"
-                   title="${escapeHtml(saleLinkLabel(sale))}">
-                  <span class="sale-date">${escapeHtml(sale.date || "")}</span>
-                  <span class="sale-title">${escapeHtml(sale.title || "Completed sale")}</span>
-                  <strong class="sale-price">${marketMoney(sale.numericPrice)}</strong>
-                  <span class="sale-arrow">↗</span>
-                </a>`;
-            }).join("")}
-          </div>` : data.salesPending ? `
-          <div class="sales-loading-row">
-            <span class="market-spinner" aria-hidden="true"></span>
-            <span>Loading recent completed sales…</span>
-          </div>` : `
-          <div class="market-empty-copy">
-            No recent ungraded completed listings were returned for this card.
-          </div>
-        `}
-      </div>
-
-      <div class="market-source-note">
-        Pricing, monthly historical trend data, and completed-sale history are sourced through
-        the managed <a href="https://parse.bot/marketplace/6808cd1c-6144-442b-b0db-17727c37d562/sportscardspro-com-api"
-        target="_blank" rel="noopener">SportsCardsPro API on Parse</a>.
-        Historical depth varies by card. Sale rows open the original listing when a URL is available;
-        otherwise they open a sold-listing search using the exact sale title.
-      </div>
-    </section>`;
-}
-
-function attachMarketGradeEvents(data, cardKeyValue) {
-  document.querySelectorAll("[data-market-grade]").forEach(button => {
-    button.addEventListener("click", () => {
-      marketGradeByCard.set(
-        cardKeyValue,
-        button.dataset.marketGrade || defaultTrendGradeKey(data.trends || {})
-      );
-
-      const target = $("market-content");
-      if (!target) return;
-
-      target.innerHTML = renderMarketData(data, cardKeyValue);
-      attachMarketGradeEvents(data, cardKeyValue);
-    });
-  });
-}
-
-async function loadMarketData(index) {
-  const row = rows[index];
-  if (!row) return;
-
-  const key = cardKey(row);
-  const target = $("market-content");
-  if (!target) return;
-
-  if (marketDataCache.has(key)) {
-    const cached = marketDataCache.get(key);
-    target.innerHTML = renderMarketData(cached, key);
-    attachMarketGradeEvents(cached, key);
-    return;
-  }
-
-  try {
-    const response = await fetch(
-      `${CONFIG.marketEndpoint}?${marketQuery(row).toString()}`,
-      { cache: "default" }
-    );
-
-    const payload = await response.json().catch(() => ({}));
-
-    const data = response.ok
-      ? payload
-      : {
-          found: false,
-          code: payload.code || "",
-          message: payload.message || payload.error || `Market lookup failed (${response.status}).`
-        };
-
-    if (data.found && !(data.sales || []).length) {
-      data.salesPending = true;
-    }
-
-    marketDataCache.set(key, data);
-
-    if (activeDetailIndex === index && $("market-content")) {
-      $("market-content").innerHTML = renderMarketData(data, key);
-      attachMarketGradeEvents(data, key);
-    }
-
-    if (data.found && data.salesPending) {
-      loadMarketSales(index, data);
-    }
-  } catch (error) {
-    const data = {
-      found: false,
-      message: `Market lookup failed: ${error.message}`
-    };
-
-    marketDataCache.set(key, data);
-
-    if (activeDetailIndex === index && $("market-content")) {
-      $("market-content").innerHTML = renderMarketData(data, key);
-    }
-  }
+function loadMarketData(index) {
+  const row=rows[index],target=$("market-content");if(!row||!target)return;
+  const data=marketGridSummaries[marketKey(row)]||{};
+  const query=[field(row,"year"),brandFor(row),fullName(row),'#'+field(row,"cardNumber"),cardTypeFor(row),field(row,"notes")].filter(Boolean).join(' ');
+  const link=data.url||`https://www.sportscardspro.com/search-products?q=${encodeURIComponent(query)}&type=prices`;
+  const points=(data.history||[]).filter(p=>Date.parse(p.date)>=Date.now()-366*86400000);
+  target.innerHTML=`<section class="market-panel"><div class="section-kicker">SPORTSCARDSPRO</div><h3>Ungraded market value</h3><div class="market-primary-value">${compactMarketValue(data.ungraded)}</div><p>${escapeHtml(data.reason||(!data.checkedAt?'Awaiting the first price sync.':'Current ungraded guide value.'))}</p><p class="market-small-label">${data.checkedAt?`Last checked ${escapeHtml(marketDateLabel(data.checkedAt))}`:''}${data.id?` · Product ID ${escapeHtml(data.id)}`:''}</p>${data.title?`<p>${escapeHtml(data.set)} · ${escapeHtml(data.title)}</p>`:''}<a href="${escapeHtml(link)}" target="_blank" rel="noopener">${data.url?'View card on':'Find card on'} SportsCardsPro ↗</a></section>
+  <section class="market-panel"><h3>Saved price history</h3>${points.length>1?chartSvg(points):'<p>History will build as prices are refreshed. Two snapshots are needed for a chart.</p>'}<p class="market-small-label">Weekly guide-value snapshots collected by this catalog. These are not individual sales. Historical sales and graded prices are not included in this integration.</p></section>
+  ${data.state==='review'?`<section class="market-panel"><h3>Confirm this card</h3><p>Add the correct numeric ID in the <strong>SportsCardsPro ID</strong> column at the far right of your Google Sheet. Then click Sync Market.</p>${(data.candidates||[]).map(c=>`<p><strong>${escapeHtml(c.id)}</strong> — ${escapeHtml(c.set)} · ${escapeHtml(c.title)}</p>`).join('')}<p class="market-small-label">Suggestions require your review; they have not been applied.</p></section>`:''}`;
 }
 
 function renderDetailContent(index) {
@@ -2187,7 +1511,7 @@ function renderDetailContent(index) {
 
       <main class="market-detail-main">
         <div id="market-content">
-          ${renderMarketLoading()}
+          <p>Loading saved prices…</p>
         </div>
       </main>
     </div>`;
@@ -2253,7 +1577,7 @@ async function loadCards() {
 
     render();
     renderMarketSyncStatus();
-    if (marketSyncStatus.running) scheduleMarketPoll();
+    if (marketSyncStatus.running || marketSyncStatus.phase === "queued") scheduleMarketPoll();
 
     $("sync-text").textContent = "Live";
     $("sync-pill").classList.add("online");
