@@ -1,3 +1,9 @@
+# v34 — Card notes and clearer value label
+
+Column O notes now display below the card model in the grid and popup. Grid notes occupy the existing description space and truncate to one line with an ellipsis; hover to see the full note, or open the popup for its full text. Blank notes show nothing. Grid column sizes and image dimensions are unchanged. The summary label is now Ungraded Collection Value; its calculation is unchanged.
+
+Deploy the supplied files to your existing Netlify site. No Sheet edits or new environment variables are needed. All v33 features remain included.
+
 # v33 — Confirm card matches in the browser
 
 Deploy all supplied files to the existing Netlify site. No new environment variables are needed.

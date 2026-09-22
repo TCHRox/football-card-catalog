@@ -746,6 +746,7 @@ function render() {
   $("catalog").innerHTML = currentPageRows.map((row) => {
     const realIndex = rows.indexOf(row);
     const sub = subtitle(row);
+    const notes = String(field(row, "notes") || "").trim();
     return `
       <article class="card card-clickable" data-index="${realIndex}" tabindex="0" role="button" aria-label="View details for ${escapeHtml(titleFor(row))}">
         <div class="card-image-wrap"><button class="favorite-button ${watchlist.has(marketKey(row))?'selected':''}" data-favorite="${realIndex}" aria-label="Toggle watchlist for ${escapeHtml(titleFor(row))}" aria-pressed="${watchlist.has(marketKey(row))}">${watchlist.has(marketKey(row))?'♥':'♡'}</button>
@@ -755,7 +756,7 @@ function render() {
         <div class="card-body">
           ${metaLine(row) ? `<div class="card-meta">${escapeHtml(metaLine(row))}</div>` : ""}
           <h3 class="card-name">${escapeHtml(titleFor(row))}</h3>
-          ${sub ? `<div class="card-subtitle">${escapeHtml(sub)}</div>` : ""}
+          ${sub || notes ? `<div class="card-subtitle card-description"><span class="card-model">${escapeHtml(sub)}</span>${notes ? `<span class="card-notes" title="${escapeHtml(notes)}">${escapeHtml(notes)}</span>` : ""}</div>` : ""}
           <div class="card-bottom card-bottom-market">
             <div class="card-market-block"
               data-grid-market-key="${escapeHtml(marketKey(row))}">
@@ -1528,6 +1529,7 @@ function renderDetailContent(index) {
           ${metaLine(row) ? `<div class="eyebrow">${escapeHtml(metaLine(row))}</div>` : ""}
           <h2>${escapeHtml(titleFor(row))}</h2>
           ${subtitle(row) ? `<div class="detail-subtitle">${escapeHtml(subtitle(row))}</div>` : ""}
+          ${String(field(row, "notes") || "").trim() ? `<p class="detail-notes">${escapeHtml(String(field(row, "notes")).trim())}</p>` : ""}
         </div>
 
         <div class="detail-actions compact-actions">

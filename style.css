@@ -1389,3 +1389,9 @@ a{color:var(--accent)}
 .market-detail-main{background:#fff}.custom-image-panel,.market-chart-card,.market-unavailable{background:#f7f7fa}.page-button,input,select{color:var(--text)}.page-button{background:#fff;border-color:var(--line)}.page-button.active{background:var(--accent);color:white}.brand-mark-image{background:transparent!important}.market-small-label{color:var(--muted)}
 .market-panel{display:block}.card:hover{background:white}.market-progress-track{background:#e7e2f5}.chart-latest-halo{fill:#e7e2f5}.chart-latest-dot{fill:var(--accent)}.dialog-close:hover{background:#eeeafb}
 #card-confirmation{order:2;border-top:1px solid var(--line);padding-top:20px}.candidate-row{font-size:12px!important;line-height:1.6}.candidate-row a{font-weight:700;white-space:nowrap}#confirm-card-form label{font-size:12px;display:block}#confirmed-product-id{display:block;background:white;border:1px solid var(--line);border-radius:8px;padding:10px;margin:8px 0 12px;width:min(100%,280px)}#confirmation-status{font-size:12px}
+
+/* v34: notes use the existing 38px description area, without growing cards. */
+.card-subtitle.card-description{height:38px;min-height:38px;overflow:hidden;line-height:16px}
+.card-description .card-model,.card-notes{display:block;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.card-notes{font-size:11px;margin-top:3px;color:var(--muted)}
+.market-card-identity .detail-notes{font-size:13px;line-height:1.6;margin:7px 0 0;color:var(--muted);white-space:pre-wrap;overflow-wrap:anywhere}
