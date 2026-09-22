@@ -1,3 +1,4 @@
+import {readMatches,applyMatches} from './_manual-matches.mjs';
 import { getStore } from '@netlify/blobs';
 
 export const STORE = 'football-card-sportscardspro-v31';
@@ -155,14 +156,14 @@ export async function runBatch(s,{cardsLoader=loadCards,token=process.env.SPORTS
     state=await s.get(KEY,{type:'json'})||blankState();
     if(!token)throw new ProviderError('SPORTSCARDSPRO_API_TOKEN is missing in the production Functions environment.',503);
     if(state.status?.retryAfter>now())return {cooldown:true};
-    const cards=await cardsLoader();
+    const cards=applyMatches(await cardsLoader(),await readMatches(s));
     const keys=new Set(cards.map(c=>c.key));
     for(const k of Object.keys(state.entries))if(!keys.has(k))delete state.entries[k];
     const unique=[...new Map(cards.map(c=>[c.key,c])).values()];
     // Don't choose between conflicting explicit IDs on identical inventory rows.
     const conflicts=new Set();const sigs=new Map();
     for(const c of cards){if(sigs.has(c.key)&&sigs.get(c.key)!==signature(c))conflicts.add(c.key);sigs.set(c.key,signature(c));}
-    const queue=unique.filter(c=>due(c,state.entries[c.key],now())).sort((a,b)=>Number(state.entries[a.key]?.retryAt||0)-Number(state.entries[b.key]?.retryAt||0));
+    const queue=unique.filter(c=>due(c,state.entries[c.key],now())).sort((a,b)=>Number(Boolean(b.productId)&&signature(b)!==state.entries[b.key]?.inputSignature)-Number(Boolean(a.productId)&&signature(a)!==state.entries[a.key]?.inputSignature)||Number(state.entries[a.key]?.retryAt||0)-Number(state.entries[b.key]?.retryAt||0));
     if(!queue.length){state.status={...state.status,running:false,phase:'complete',error:'',...totals(cards,state,now())};await s.setJSON(KEY,state);return {idle:true};}
     const startedAt=now();const api=clientFactory(token,state);let processed=0;
     state.status={...state.status,running:true,phase:'pricing',phaseLabel:'Updating SportsCardsPro prices',startedAt,error:'',...totals(cards,state,now())};

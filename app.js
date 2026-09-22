@@ -437,6 +437,7 @@ function searchable(row) {
 
 function filteredRows() {
   let filtered = [...rows];
+  if(unconfirmedOnly) filtered=filtered.filter(isUnconfirmed);
   if(watchlistOnly) filtered=filtered.filter(r=>watchlist.has(marketKey(r)));
   const q = norm($("search").value);
   const year = $("year-filter").value;
@@ -781,6 +782,7 @@ function render() {
 
   document.querySelectorAll("[data-favorite]").forEach(button=>button.addEventListener("click",event=>{event.stopPropagation();toggleFavorite(Number(button.dataset.favorite));}));
   $("watchlist-count").textContent=watchlist.size;
+  $("unconfirmed-count").textContent=rows.filter(isUnconfirmed).length;
   renderPagination(totalPages, totalEntries);
   setupAutoImageLoading();
 }
@@ -1451,6 +1453,14 @@ function chartSvg(points) {
     </svg>`;
 }
 
+function renderConfirmation(index){
+ const panel=$('card-confirmation'),data=marketGridSummaries[marketKey(rows[index])]||{};
+ panel.innerHTML='<h3>'+(data.id||data.manualId?'Card match':'Confirm this card')+'</h3><p class="market-small-label">Open a candidate to check its year, set, number and parallel, then save the correct product ID below.</p>'+ (data.candidates||[]).map(c=>{const query=[c.set,c.title].filter(Boolean).join(' ');return '<p class="candidate-row"><a target="_blank" rel="noopener" href="https://www.sportscardspro.com/search-products?type=prices&q='+encodeURIComponent(query)+'">'+escapeHtml(c.id)+' ↗</a> — '+escapeHtml(c.set)+' · '+escapeHtml(c.title)+'</p>';}).join('')+'<p class="market-small-label">Candidate links open a SportsCardsPro search for that card.</p><form id="confirm-card-form"><label>SportsCardsPro ID<input id="confirmed-product-id" type="text" inputmode="numeric" pattern="[0-9]{1,15}" required value="'+escapeHtml(data.manualId||data.id||'')+'" placeholder="e.g. 6116541"></label><button class="button primary" type="submit">Save card ID</button><p id="confirmation-status" role="status">'+(data.manualId?'Saved ID: '+escapeHtml(data.manualId):'')+'</p></form>';
+ const form=$('confirm-card-form');form.onsubmit=async event=>{event.preventDefault();const password=requestAdminPassword();if(!password)return;const id=form.querySelector('input').value.trim();const status=form.querySelector('[role=status]'),button=form.querySelector('button');button.disabled=true;status.textContent='Saving…';
+ try{const r=await fetch('/.netlify/functions/confirm-card',{method:'POST',headers:{'content-type':'application/json','x-catalog-admin':password},body:JSON.stringify({key:marketKey(rows[index]),id})});const result=await r.json();if(!r.ok){if(r.status===401)sessionStorage.removeItem('football-card-admin-password');throw Error(result.error||'Could not save ID.');}const key=marketKey(rows[index]);const old=marketGridSummaries[key]||{};marketGridSummaries[key]={...old,manualId:id,...(old.id===id?{}:{id:'',ungraded:null,history:[],checkedAt:null,state:'pending',reason:'ID saved. Waiting for the next pricing batch.'})};status.textContent='Saved permanently. The next scheduled pricing batch will use this ID.';render();if(activeDetailIndex===index)loadMarketData(index);
+ }catch(e){status.textContent=e.message;}finally{button.disabled=false;}};
+}
+
 const recentSalesState = new Map();
 function recentSalesPanel(index) {
   const state = recentSalesState.get(index);
@@ -1494,7 +1504,7 @@ function loadMarketData(index) {
   target.innerHTML=`<section class="market-panel"><div class="section-kicker">SPORTSCARDSPRO</div><h3>Ungraded market value</h3><div class="market-primary-value">${compactMarketValue(data.ungraded)}</div><p>${escapeHtml(data.reason||(!data.checkedAt?'Awaiting the first price sync.':'Current ungraded guide value.'))}</p><p class="market-small-label">${data.checkedAt?`Last checked ${escapeHtml(marketDateLabel(data.checkedAt))}`:''}${data.id?` · Product ID ${escapeHtml(data.id)}`:''}</p>${data.title?`<p>${escapeHtml(data.set)} · ${escapeHtml(data.title)}</p>`:''}<a href="${escapeHtml(link)}" target="_blank" rel="noopener">${data.url?'View card on':'Find card on'} SportsCardsPro ↗</a></section>
   <section class="market-panel"><h3>Saved price history</h3>${points.length>1?chartSvg(points):'<p>History will build as prices are refreshed. Two snapshots are needed for a chart.</p>'}<p class="market-small-label">Weekly guide-value snapshots collected by this catalog. These are not individual sales. Recent sales below use a separate Parse integration.</p></section>
   <section class="market-panel recent-sales-section"><h3>Recent sales</h3><div id="recent-sales-content">${recentSalesPanel(index)}</div></section>
-  ${data.state==='review'?`<section class="market-panel"><h3>Confirm this card</h3><p>Add the correct numeric ID in the <strong>SportsCardsPro ID</strong> column at the far right of your Google Sheet. Then click Sync Market.</p>${(data.candidates||[]).map(c=>`<p><strong>${escapeHtml(c.id)}</strong> — ${escapeHtml(c.set)} · ${escapeHtml(c.title)}</p>`).join('')}<p class="market-small-label">Suggestions require your review; they have not been applied.</p></section>`:''}`;
+  `;
 }
 
 function renderDetailContent(index) {
@@ -1548,13 +1558,14 @@ function renderDetailContent(index) {
         </section>
       </aside>
 
-      <main class="market-detail-main"><section id="manual-grades" class="market-panel"><h3>My graded prices</h3><p>Loading saved prices…</p></section>
+      <main class="market-detail-main"><section id="card-confirmation" class="market-panel"></section><section id="manual-grades" class="market-panel"><h3>My graded prices</h3><p>Loading saved prices…</p></section>
         <div id="market-content">
           <p>Loading saved prices…</p>
         </div>
       </main>
     </div>`;
 
+  renderConfirmation(index);
   loadManualGrades(index);
   attachCustomEditorEvents(index);
   loadMarketData(index);
@@ -1696,12 +1707,14 @@ document.addEventListener("paste", event => {
   uploadCustomImage(activeDetailIndex, file);
 });
 
-let watchlistOnly=false;
+let watchlistOnly=false,unconfirmedOnly=false;
+function isUnconfirmed(row){const d=marketGridSummaries[marketKey(row)]||{};return !d.id&&!d.manualId;}
 let watchlist;try{watchlist=new Set(JSON.parse(localStorage.getItem('football-watchlist-v1')||'[]'));}catch{watchlist=new Set();}
 function toggleFavorite(index){const key=marketKey(rows[index]);const next=new Set(watchlist);next.has(key)?next.delete(key):next.add(key);try{localStorage.setItem('football-watchlist-v1',JSON.stringify([...next]));watchlist=next;render();}catch{alert('Your browser could not save the watchlist. Check browser storage settings.');}}
-function setWatchlist(only){watchlistOnly=only;currentPage=1;$('watchlist-tab').classList.toggle('active',only);$('all-cards-tab').classList.toggle('active',!only);$('collection-title').textContent=only?'Watchlist':'All cards';render();}
+function setWatchlist(only){unconfirmedOnly=false;$("unconfirmed-tab").classList.remove("active");watchlistOnly=only;currentPage=1;$('watchlist-tab').classList.toggle('active',only);$('all-cards-tab').classList.toggle('active',!only);$('collection-title').textContent=only?'Watchlist':'All cards';render();}
 $('watchlist-tab').onclick=()=>setWatchlist(true);
 $('all-cards-tab').onclick=()=>setWatchlist(false);
+$('unconfirmed-tab').onclick=()=>{setWatchlist(false);unconfirmedOnly=true;$('all-cards-tab').classList.remove('active');$('unconfirmed-tab').classList.add('active');$('collection-title').textContent='Unconfirmed cards';render();};
 for(const [id,label] of [['year-filter','Year'],['sort','Sort by'],['page-size','Show']]){const wrap=document.createElement('label');wrap.className='sidebar-field';wrap.textContent=label;wrap.appendChild($(id));$('sidebar-filters').appendChild(wrap);}
 const grades=['7','8','9','9.5','PSA 10'];
 async function loadManualGrades(index){

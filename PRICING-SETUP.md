@@ -1,3 +1,17 @@
+# v33 — Confirm card matches in the browser
+
+Deploy all supplied files to the existing Netlify site. No new environment variables are needed.
+
+Open a card and use Confirm this card (or Card match on already matched cards). Candidate IDs are clickable SportsCardsPro searches using the candidate set/title. Enter the numeric product ID, click Save card ID, and enter the existing catalog admin password. Saving requires a successful Netlify response.
+
+IDs are stored persistently in Netlify Blobs, independent of the weekly worker's pricing state. They survive redeploys on the same site and take precedence over Sheet ID/URL fields. The Sheet is not modified. New corrections are prioritized when the next batch starts (normally within ten minutes, subject to provider error cooldowns). A currently running batch may finish first. An old price is hidden while a different saved ID awaits verification. Saved means the mapping was stored, not that SportsCardsPro has verified that ID yet. Correct a mistaken ID using the same field.
+
+Unconfirmed shows entries without an API match or browser-saved ID, including entries awaiting their first match. Successfully saved IDs leave this tab immediately. Cards with a confirmed ID but no available price do not count as unconfirmed.
+
+The confirmation form is independent of pricing refreshes, so polling does not erase an ID being typed. As with other saved card data, changing identifying Sheet fields creates a different card identity.
+
+Validation: 21 automated tests and simulated popup/filter/save interactions passed. Live Netlify saving still requires verification after deployment. Candidate searches may show multiple variants; inspect the exact card before saving.
+
 # v32 — Light archive, watchlist and manual graded prices
 
 Deploy all supplied files through the same Netlify build. Keep your existing Netlify site: pricing history, custom images and sync progress remain in their existing stores. No new environment variables or subscriptions are required.

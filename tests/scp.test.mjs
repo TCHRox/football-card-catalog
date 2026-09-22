@@ -85,3 +85,9 @@ test('client enforces spacing, converts HTTP errors, never echoes token',async()
 test('public entries do not expose internal settings or request timestamps',()=>{
  const result=publicEntries({entries:{x:{...refreshEntry({},product,now),inputSignature:'private'}},lastRequestAt:now});assert.equal(result.x.inputSignature,undefined);
 });
+
+ test('browser match overrides Sheet ID and is applied by the pricing worker',async()=>{
+ const s=memoryStore({'manual-matches-v1':{[row.key]:{id:'123'}}});const log=[];
+ await runBatch(s,{token:'test',cardsLoader:async()=>[{...row,productId:'999'}],now:()=>now,clientFactory:fakeClient(log)});
+ assert.deepEqual(log,[['product',{id:'123'}]]);assert.equal((await s.get('state')).entries[row.key].id,'123');assert.equal((await s.get('manual-matches-v1'))[row.key].id,'123');
+ });
