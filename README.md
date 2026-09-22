@@ -1,3 +1,13 @@
+# v35 — Stop one missing card from blocking market sync
+
+Deploy the supplied files to your existing Netlify site, then click Sync Market once. No key changes are needed. Existing prices, manual confirmations, graded prices and images remain in their existing stores.
+
+Structured API 404 lookup responses now flag that card for review and continue to the next card. The affected card is deferred for 30 days unless its mapping changes. Existing prices for unchanged mappings are retained. Cards flagged for review appear in Unconfirmed even if they had an earlier ID. Five consecutive missing lookups pause the batch as a possible broader provider issue. Authentication errors, rate limits, connection failures and unreadable responses still pause the batch.
+
+The obsolete cooldown with the exact earlier HTTP 404 message is ignored by the launcher, scheduled trigger and worker so the deployment can recover immediately. Retry timestamps in launcher errors include an explicit UTC timezone to avoid server/browser timezone ambiguity.
+
+23 tests passed, including continued progress past a 404, recovery from an old cooldown and distinguishing structured lookup errors from unreadable HTTP errors. The production fix still requires this deployment; no credentials were changed.
+
 # v34 — Card notes and clearer value label
 
 Column O notes now display below the card model in the grid and popup. Grid notes occupy the existing description space and truncate to one line with an ellipsis; hover to see the full note, or open the popup for its full text. Blank notes show nothing. Grid column sizes and image dimensions are unchanged. The summary label is now Ungraded Collection Value; its calculation is unchanged.

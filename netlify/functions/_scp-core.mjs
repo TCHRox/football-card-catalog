@@ -85,7 +85,7 @@ export function refreshEntry(entry,product,now=Date.now()) {
     const point={date,numericPrice:amount};
     const idx=history.findIndex(p=>p.date===date);if(idx>=0)history[idx]=point;else history.push(point);
   }
-  return {...entry,id:String(product.id),title:product['product-name']||'',set:product['console-name']||'',ungraded:amount,checkedAt:now,updatedAt:now,history:history.filter(p=>Date.parse(p.date)>now-400*DAY).slice(-400),source:'SportsCardsPro',state:validPrice(amount)?'priced':'no-price',reason:validPrice(amount)?'':'SportsCardsPro has no current ungraded price.',url:sourceURL(entry.url),changes:{ungraded:null},retryAt:now+7*DAY};
+  return {...entry,id:String(product.id),title:product['product-name']||'',set:product['console-name']||'',ungraded:amount,checkedAt:now,updatedAt:now,history:history.filter(p=>Date.parse(p.date)>now-400*DAY).slice(-400),source:'SportsCardsPro',lookupNotFound:false,state:validPrice(amount)?'priced':'no-price',reason:validPrice(amount)?'':'SportsCardsPro has no current ungraded price.',url:sourceURL(entry.url),changes:{ungraded:null},retryAt:now+7*DAY};
 }
 export function publicEntries(state) {
   return Object.fromEntries(Object.entries(state.entries||{}).map(([k,e])=>[k,{ungraded:e.ungraded??null,source:'SportsCardsPro',updatedAt:e.updatedAt||null,checkedAt:e.checkedAt||null,id:e.id||'',title:e.title||'',set:e.set||'',url:sourceURL(e.url),state:e.state,reason:e.reason||'',history:e.history||[],changes:{ungraded:null},candidates:e.candidates||[]}]));
@@ -102,6 +102,7 @@ export async function acquireLease(s,now=Date.now()) {
   return result.modified ? result.etag : null;
 }
 export async function releaseLease(s,etag){if(etag)await s.setJSON('lease',{until:0},{onlyIfMatch:etag});}
+export const legacyLookup404 = status => status?.error === 'SportsCardsPro could not complete the request (HTTP 404).';
 export class ProviderError extends Error {constructor(message,status=502){super(message);this.status=status;}}
 export function client(token,state,{fetcher=fetch,now=Date.now,sleep=ms=>new Promise(r=>setTimeout(r,ms))}={}) {
   let calls=0;
@@ -117,7 +118,9 @@ export function client(token,state,{fetcher=fetch,now=Date.now,sleep=ms=>new Pro
     if(!response.ok || data.status!=='success') {
       const status=response.status===200?502:response.status;
       // Never echo provider bodies, request URLs, or token-bearing exceptions.
-      throw new ProviderError([401,403].includes(status)?'SportsCardsPro rejected access. Check the production token and Collector API entitlement.':status===429?'SportsCardsPro rate limit reached. The next batch will retry later.':`SportsCardsPro could not complete the request (HTTP ${response.status}).`,status);
+      const error = new ProviderError([401,403].includes(status)?'SportsCardsPro rejected access. Check the production token and Collector API entitlement.':status===429?'SportsCardsPro rate limit reached. The next batch will retry later.':`SportsCardsPro could not complete the request (HTTP ${response.status}).`,status);
+      error.lookupNotFound = status===404;
+      throw error;
     }
     return data;
   }};
@@ -129,11 +132,12 @@ export async function processCard(c,state,api,now=Date.now()) {
   let e=changed?{}:old;
   const url=sourceURL(c.url);
   const base={...e,inputSignature:signature(c),url};
-  const review=(reason,candidates=[])=>({...base,id:'',ungraded:null,updatedAt:null,history:[],state:'review',reason,retryAt:now+30*DAY,candidates:candidates.slice(0,5).map(p=>({id:String(p.id),title:p['product-name'],set:p['console-name']}))});
+  const review=(reason,candidates=[])=>({...base,lookupNotFound:false,id:'',ungraded:null,updatedAt:null,history:[],state:'review',reason,retryAt:now+30*DAY,candidates:candidates.slice(0,5).map(p=>({id:String(p.id),title:p['product-name'],set:p['console-name']}))});
   if(c.productId && !/^\d+$/.test(c.productId))return review('SportsCardsPro ID must contain digits only.');
   if(c.url && !url)return review('Use an HTTPS SportsCardsPro /game/ card URL.');
   let product;
   const id=c.productId||e.id;
+  try {
   if(id) {
     product=await api.get('product',{id});
     if(String(product.id)!==String(id))throw new ProviderError('SportsCardsPro returned a different product ID. The value was not applied.');
@@ -147,6 +151,10 @@ export async function processCard(c,state,api,now=Date.now()) {
     if(!matchesCard(c,product))return review('Product details did not confirm the search match.');
   }
   return refreshEntry(base,product,now);
+  } catch(error) {
+    if(!error.lookupNotFound)throw error;
+    return {...base,state:'review',reason:'SportsCardsPro could not find this card lookup (404). Confirm or correct its product ID in the popup.'+(validPrice(base.ungraded)?' The previous saved price is retained.':''),retryAt:now+30*DAY,lookupNotFound:true};
+  }
 }
 // Injected dependencies make batch recovery and API limits testable without credentials.
 export async function runBatch(s,{cardsLoader=loadCards,token=process.env.SPORTSCARDSPRO_API_TOKEN,now=Date.now,clientFactory=client,maxCalls=180,maxMs=240000}={}) {
@@ -155,7 +163,7 @@ export async function runBatch(s,{cardsLoader=loadCards,token=process.env.SPORTS
   try {
     state=await s.get(KEY,{type:'json'})||blankState();
     if(!token)throw new ProviderError('SPORTSCARDSPRO_API_TOKEN is missing in the production Functions environment.',503);
-    if(state.status?.retryAfter>now())return {cooldown:true};
+    if(state.status?.retryAfter>now()&&!legacyLookup404(state.status))return {cooldown:true};
     const cards=applyMatches(await cardsLoader(),await readMatches(s));
     const keys=new Set(cards.map(c=>c.key));
     for(const k of Object.keys(state.entries))if(!keys.has(k))delete state.entries[k];
@@ -165,7 +173,7 @@ export async function runBatch(s,{cardsLoader=loadCards,token=process.env.SPORTS
     for(const c of cards){if(sigs.has(c.key)&&sigs.get(c.key)!==signature(c))conflicts.add(c.key);sigs.set(c.key,signature(c));}
     const queue=unique.filter(c=>due(c,state.entries[c.key],now())).sort((a,b)=>Number(Boolean(b.productId)&&signature(b)!==state.entries[b.key]?.inputSignature)-Number(Boolean(a.productId)&&signature(a)!==state.entries[a.key]?.inputSignature)||Number(state.entries[a.key]?.retryAt||0)-Number(state.entries[b.key]?.retryAt||0));
     if(!queue.length){state.status={...state.status,running:false,phase:'complete',error:'',...totals(cards,state,now())};await s.setJSON(KEY,state);return {idle:true};}
-    const startedAt=now();const api=clientFactory(token,state);let processed=0;
+    const startedAt=now();const api=clientFactory(token,state);let processed=0,notFoundStreak=0;
     state.status={...state.status,running:true,phase:'pricing',phaseLabel:'Updating SportsCardsPro prices',startedAt,error:'',...totals(cards,state,now())};
     await s.setJSON(KEY,state);
     for(const c of queue) {
@@ -175,6 +183,8 @@ export async function runBatch(s,{cardsLoader=loadCards,token=process.env.SPORTS
         if(state.entries[c.key] && state.entries[c.key].inputSignature!==signature(c))state.entries[c.key]={state:'pending',inputSignature:signature(c),retryAt:0};
         state.entries[c.key]=await processCard(c,state,api,now());
       }
+      notFoundStreak=state.entries[c.key]?.lookupNotFound?notFoundStreak+1:0;
+      if(notFoundStreak>=5)throw new ProviderError('Five consecutive card lookups were not found. Sync paused to check provider availability; saved prices are retained.',502);
       processed++;
       state.status={...state.status,...totals(cards,state,now()),priceIdsTotal:queue.length,priceIdsProcessed:processed,apiCallsThisRun:api.calls};
       if(processed%5===0)await s.setJSON(KEY,state);

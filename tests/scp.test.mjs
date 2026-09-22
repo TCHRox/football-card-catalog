@@ -91,3 +91,14 @@ test('public entries do not expose internal settings or request timestamps',()=>
  await runBatch(s,{token:'test',cardsLoader:async()=>[{...row,productId:'999'}],now:()=>now,clientFactory:fakeClient(log)});
  assert.deepEqual(log,[['product',{id:'123'}]]);assert.equal((await s.get('state')).entries[row.key].id,'123');assert.equal((await s.get('manual-matches-v1'))[row.key].id,'123');
  });
+
+test('one missing lookup does not block the next card, including a legacy cooldown',async()=>{
+ const state=blankState();state.status={error:'SportsCardsPro could not complete the request (HTTP 404).',retryAfter:now+100000};
+ const s=memoryStore({state});const other={...row,key:'second-card'};let calls=0;
+ const factory=()=>({get calls(){return calls},async get(path){calls++;if(calls===1){const error=new ProviderError('Not found',404);error.lookupNotFound=true;throw error;}return path==='products'?{products:[product]}:product;}});
+ const result=await runBatch(s,{token:'test',cardsLoader:async()=>[row,other],now:()=>now,clientFactory:factory});
+ const saved=await s.get('state');assert.equal(saved.entries[row.key].state,'review');assert.equal(saved.entries[other.key].ungraded,3.25);assert.equal(result.error,'');assert.equal(result.retryAfter,0);
+});
+test('JSON provider 404 is card-specific, HTML 404 is not',async()=>{
+ for(const jsonBody of [true,false]){const api=client('secret',blankState(),{fetcher:async()=>({status:404,ok:false,json:async()=>{if(!jsonBody)throw Error('HTML');return {status:'error'}}})});await assert.rejects(()=>api.get('products',{q:'card'}),error=>error.status===404&&Boolean(error.lookupNotFound)===jsonBody);}
+});

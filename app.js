@@ -1710,7 +1710,7 @@ document.addEventListener("paste", event => {
 });
 
 let watchlistOnly=false,unconfirmedOnly=false;
-function isUnconfirmed(row){const d=marketGridSummaries[marketKey(row)]||{};return !d.id&&!d.manualId;}
+function isUnconfirmed(row){const d=marketGridSummaries[marketKey(row)]||{};return d.state==='review'||(!d.id&&!d.manualId);}
 let watchlist;try{watchlist=new Set(JSON.parse(localStorage.getItem('football-watchlist-v1')||'[]'));}catch{watchlist=new Set();}
 function toggleFavorite(index){const key=marketKey(rows[index]);const next=new Set(watchlist);next.has(key)?next.delete(key):next.add(key);try{localStorage.setItem('football-watchlist-v1',JSON.stringify([...next]));watchlist=next;render();}catch{alert('Your browser could not save the watchlist. Check browser storage settings.');}}
 function setWatchlist(only){unconfirmedOnly=false;$("unconfirmed-tab").classList.remove("active");watchlistOnly=only;currentPage=1;$('watchlist-tab').classList.toggle('active',only);$('all-cards-tab').classList.toggle('active',!only);$('collection-title').textContent=only?'Watchlist':'All cards';render();}
