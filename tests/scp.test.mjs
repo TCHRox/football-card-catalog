@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {cardKey,cents,chooseMatch,matchesCard,signature,refreshEntry,blankState,runBatch,client,ProviderError,DAY,sourceURL,processCard,sheetCards,acquireLease,releaseLease,publicEntries,bypassLegacyCooldown} from '../netlify/functions/_scp-core.mjs';
+import {cardKey,cents,chooseMatch,matchesCard,signature,refreshEntry,blankState,runBatch,client,ProviderError,DAY,sourceURL,processCard,sheetCards,acquireLease,releaseLease,publicEntries,bypassLegacyCooldown,due,MATCHER_VERSION} from '../netlify/functions/_scp-core.mjs';
 const now=Date.UTC(2026,8,21);
 const row={player:'Troy Aikman',year:'1989',brand:'Score',number:'270',type:'Base',rookie:'Y',notes:'',productId:'',url:''};row.key=cardKey(row);
 const product={id:'123', 'product-name':'Troy Aikman #270','console-name':'Football Cards 1989 Score','loose-price':325};
@@ -17,11 +17,15 @@ test('exact identity matches, wrong year/set/player/number does not',()=>{
  assert.ok(matchesCard(row,product));
  for(const p of [{...product,'console-name':'Football Cards 1990 Score'},{...product,'console-name':'Football Cards 1989 Score Supplemental'},{...product,'product-name':'Troy Aikman #270 [Gold]'},{...product,'product-name':'Troy Aikmann #270'},{...product,'product-name':'Troy Aikman #2700'}])assert.equal(matchesCard(row,p),false);
 });
-test('variants and inserts require exact descriptors; ties unresolved',()=>{
- assert.equal(chooseMatch(row,[product,{...product,id:'124'}]),null);
+test('scored matcher accepts strong base and clearly described variant matches',()=>{
+ assert.equal(chooseMatch(row,[product,{...product,id:'124','product-name':'Troy Aikman [Silver] #270'}]).id,'123');
  assert.equal(chooseMatch({...row,type:'Parallel'},[product]),null);
  assert.ok(matchesCard({...row,type:'Parallel',notes:'Gold'},{...product,'product-name':'Troy Aikman [Gold] #270'}));
  assert.equal(matchesCard({...row,type:'Parallel',notes:'Gold'},{...product,'product-name':'Troy Aikman [Gold Refractor] #270'}),false);
+ assert.equal(chooseMatch({...row,type:'Parallel',notes:'Red'},[
+   {...product,id:'125','product-name':'Troy Aikman [Red] #270'},
+   {...product,id:'126','product-name':'Troy Aikman [Red Wave] #270'}
+ ]).id,'125');
 });
 test('alphanumeric card numbers preserved',()=>{
  assert.ok(matchesCard({...row,number:'RC-10'},{...product,'product-name':'Troy Aikman #RC-10'}));
@@ -47,6 +51,23 @@ test('manual numeric IDs resolve naming variations; malformed IDs require review
  const state=blankState();const api=fakeClient([])();
  assert.equal((await processCard({...row,productId:'123'},state,api,now)).id,'123');
  assert.equal((await processCard({...row,productId:'bad'},state,api,now)).state,'review');
+});
+
+test('review entries from older matcher versions are due immediately',()=>{
+ const entry={state:'review',matcherVersion:MATCHER_VERSION-1,inputSignature:signature(row),retryAt:now+30*DAY};
+ assert.equal(due(row,entry,now),true);
+ assert.equal(due(row,{...entry,matcherVersion:MATCHER_VERSION},now),false);
+});
+
+test('stored review candidates are rescored before re-searching SportsCardsPro',async()=>{
+ const state={...blankState(),entries:{[row.key]:{state:'review',inputSignature:signature(row),matcherVersion:MATCHER_VERSION-1,candidates:[
+   {id:'124',title:'Troy Aikman [Silver] #270',set:'Football Cards 1989 Score',score:89},
+   {id:'123',title:'Troy Aikman #270',set:'Football Cards 1989 Score',score:105}
+ ]}}};
+ const calls=[]; const api=fakeClient(calls)();
+ const result=await processCard(row,state,api,now);
+ assert.equal(result.id,'123');
+ assert.deepEqual(calls,[['product',{id:'123'}]]);
 });
 test('weekly cache and duplicate copies avoid repeated API calls',async()=>{
  const s=memoryStore();const log=[];const options={cardsLoader:async()=>[row,{...row,quantity:3}],token:'test',now:()=>now,clientFactory:fakeClient(log)};

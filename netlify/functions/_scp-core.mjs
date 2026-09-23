@@ -51,29 +51,91 @@ export function sourceURL(v) {
   catch{return '';}
 }
 export const signature = c => JSON.stringify([c.productId||'',c.url||'']);
+export const MATCHER_VERSION = 38;
 function normalizedSet(v) {return words(v).replace(/^football cards?\s*/,'').replace(/\bpanini\b/g,'').replace(/\bdonruss optics\b/g,'donruss optic').replace(/\s+/g,' ').trim();}
-export function searchQuery(c) {return [c.year,c.brand,c.player,'#'+c.number,c.type && !/^(base|base set|parallel|insert|subset)$/i.test(c.type)?c.type:'',c.notes].filter(Boolean).join(' ');}
+const splitWords = v => words(v).split(' ').filter(Boolean);
+const overlap = (a,b) => {
+  const aa=[...new Set(splitWords(a))], bb=[...new Set(splitWords(b))];
+  if(!aa.length || !bb.length) return 0;
+  const bset=new Set(bb);
+  const shared=aa.filter(x=>bset.has(x)).length;
+  return shared/Math.max(aa.length,bb.length);
+};
+const genericTypes = new Set(['','base','base set','parallel','insert','subset']);
+const normalizeNumber = v => words(String(v||'').replace(/^\s*#\s*/,''));
+const extractNumber = title => normalizeNumber(String(title||'').match(/#\s*([a-z0-9-]+)/i)?.[1]||'');
+const extractPlayer = title => words(String(title||'').replace(/\[[^\]]*\]/g,'').replace(/#.*$/,'').replace(/\b(rc|rookie card)\b/ig,''));
+const extractVariant = title => words((String(title||'').match(/\[([^\]]+)\]/)||[])[1]||'');
+const descriptorWords = c => words([
+  !genericTypes.has(norm(c.type)) ? c.type : '',
+  c.notes
+].filter(Boolean).join(' '));
+const searchFromURL = url => decodeURIComponent(new URL(url).pathname.slice(6)).replace(/[\/_-]/g,' ');
+export function searchQuery(c) {return [c.year,c.brand,c.player,'#'+c.number,!genericTypes.has(norm(c.type))?c.type:'',c.notes].filter(Boolean).join(' ');}
+export function alternateSearchQuery(c) {return [c.player,'#'+c.number,c.year,c.brand,c.notes].filter(Boolean).join(' ');}
 // Accept only an exact catalog identity. Fuzzy search results are suggestions for review.
 export function matchesCard(c,p) {
   if(!/^\d+$/.test(String(p.id||'')))return false;
   const set=normalizedSet(p['console-name']);
-  const number=String(p['product-name']||'').match(/#\s*([a-z0-9-]+)/i)?.[1]||'';
-  if(words(number)!==words(c.number))return false;
+  const number=extractNumber(p['product-name']);
+  if(number!==normalizeNumber(c.number))return false;
   const title=String(p['product-name']||'');
-  const player=words(title.replace(/\[[^\]]*\]/g,'').replace(/#.*$/,''));
+  const player=extractPlayer(title);
   if(player!==words(c.player))return false;
   const expected=normalizedSet([c.year,c.brand].join(' '));
   const type=norm(c.type);
   if(['parallel','insert','subset'].includes(type) && !c.notes)return false;
-  const descriptor=words([!['','base','base set','parallel','insert','subset'].includes(type)?c.type:'',c.notes].filter(Boolean).join(' '));
-  const titleVariant=words((title.match(/\[([^\]]+)\]/)||[])[1]||'');
+  const descriptor=descriptorWords(c);
+  const titleVariant=extractVariant(title);
   if(!descriptor)return set===expected && !titleVariant;
   return (set===expected && titleVariant===descriptor) || (set===normalizedSet(expected+' '+descriptor) && !titleVariant);
 }
+export function scoreMatch(c,p) {
+  const title=String(p['product-name']||'');
+  const set=String(p['console-name']||'');
+  const expectedSet=normalizedSet([c.year,c.brand].join(' '));
+  const actualSet=normalizedSet(set);
+  const expectedDescriptor=descriptorWords(c);
+  const actualVariant=extractVariant(title);
+  const actualPlayer=extractPlayer(title);
+  const expectedPlayer=words(c.player);
+  const actualNumber=extractNumber(title);
+  const expectedNumber=normalizeNumber(c.number);
+  const actualYear=(set.match(/\b(19|20)\d{2}\b/)||[])[0]||'';
+  const exact={number:actualNumber===expectedNumber,player:actualPlayer===expectedPlayer,year:actualYear===String(c.year),set:actualSet===expectedSet,variant:actualVariant===expectedDescriptor};
+  let score=0;
+  score += exact.number ? 45 : (actualNumber && expectedNumber && (actualNumber.includes(expectedNumber) || expectedNumber.includes(actualNumber)) ? 16 : -40);
+  const playerOverlap=overlap(actualPlayer,expectedPlayer);
+  score += exact.player ? 28 : playerOverlap>=0.86 ? 16 : playerOverlap>=0.65 ? 8 : -24;
+  score += exact.year ? 12 : (actualYear ? -18 : 0);
+  const setOverlap=overlap(actualSet.replace(/^\b(19|20)\d{2}\b\s*/,''), expectedSet.replace(/^\b(19|20)\d{2}\b\s*/,''));
+  score += exact.set ? 20 : setOverlap>=0.86 ? 14 : setOverlap>=0.6 ? 8 : -12;
+  if(expectedDescriptor) {
+    const variantOverlap=Math.max(overlap(actualVariant,expectedDescriptor), overlap(words(actualSet+' '+actualVariant), expectedDescriptor));
+    score += exact.variant ? 18 : variantOverlap>=0.86 ? 12 : variantOverlap>=0.6 ? 6 : (actualVariant ? -14 : -8);
+  } else if(actualVariant) {
+    score -= 8;
+  } else {
+    score += 8;
+  }
+  return {product:p,score,exact};
+}
 export function chooseMatch(c,products) {
-  const unique=[...new Map(products.map(p=>[String(p.id),p])).values()];
-  const exact=unique.filter(p=>matchesCard(c,p));
-  return exact.length===1 ? exact[0] : null;
+  if(['parallel','insert','subset'].includes(norm(c.type)) && !c.notes) return null;
+  const unique=[...new Map((products||[]).map(p=>[String(p.id),p])).values()];
+  const scored=unique.map(p=>scoreMatch(c,p)).sort((a,b)=>b.score-a.score || String(a.product.id).localeCompare(String(b.product.id)));
+  const best=scored[0], second=scored[1];
+  if(!best) return null;
+  const lead=best.score-(second?.score ?? -999);
+  const accept=best.exact.number && best.exact.player && best.exact.year && best.score>=78 && (lead>=8 || best.score>=92 || (best.exact.set && (best.exact.variant || !descriptorWords(c)) && lead>=4));
+  return accept ? best.product : null;
+}
+export function candidateSummary(c,products) {
+  return [...new Map((products||[]).map(p=>[String(p.id),p])).values()]
+    .map(p=>scoreMatch(c,p))
+    .sort((a,b)=>b.score-a.score || String(a.product.id).localeCompare(String(b.product.id)))
+    .slice(0,5)
+    .map(({product,score})=>({id:String(product.id),title:product['product-name'],set:product['console-name'],score}));
 }
 export function refreshEntry(entry,product,now=Date.now()) {
   const amount=cents(product['loose-price']);
@@ -94,7 +156,7 @@ export function totals(cards,state,now=Date.now()) {
   const entries=state.entries||{};
   return {totalRows:cards.length,matchedRows:cards.filter(c=>entries[c.key]?.id).length,valuedRows:cards.filter(c=>validPrice(entries[c.key]?.ungraded)).length,unresolvedRows:cards.filter(c=>entries[c.key]?.state==='review').length,pendingRows:cards.filter(c=>!entries[c.key]).length,dueRows:cards.filter(c=>due(c,entries[c.key],now)).length};
 }
-export function due(c,e,now=Date.now()) {return !e || signature(c)!==e.inputSignature || now>=Number(e.retryAt||0);}
+export function due(c,e,now=Date.now()) {return !e || signature(c)!==e.inputSignature || now>=Number(e.retryAt||0) || (e.state==='review' && Number(e.matcherVersion||0)<MATCHER_VERSION);}
 export async function acquireLease(s,now=Date.now()) {
   const current=await s.getWithMetadata('lease',{type:'json'});
   if(current?.data?.until>now)return null;
@@ -167,7 +229,7 @@ export async function processCard(c,state,api,now=Date.now()) {
   let e=changed?{}:old;
   const url=sourceURL(c.url);
   const base={...e,inputSignature:signature(c),url};
-  const review=(reason,candidates=[])=>({...base,lookupNotFound:false,id:'',ungraded:null,updatedAt:null,history:[],state:'review',reason,retryAt:now+30*DAY,candidates:candidates.slice(0,5).map(p=>({id:String(p.id),title:p['product-name'],set:p['console-name']}))});
+  const review=(reason,candidates=[])=>({...base,lookupNotFound:false,id:'',ungraded:null,updatedAt:null,history:[],state:'review',reason,retryAt:now+30*DAY,matcherVersion:MATCHER_VERSION,candidates:candidateSummary(c,candidates)});
   if(c.productId && !/^\d+$/.test(c.productId))return review('SportsCardsPro ID must contain digits only.');
   if(c.url && !url)return review('Use an HTTPS SportsCardsPro /game/ card URL.');
   let product;
@@ -178,17 +240,32 @@ export async function processCard(c,state,api,now=Date.now()) {
     if(String(product.id)!==String(id))throw new ProviderError('SportsCardsPro returned a different product ID. The value was not applied.');
     // Explicit IDs intentionally resolve naming differences and ambiguous variants.
   } else {
-    const result=await api.get('products',{q:url ? decodeURIComponent(new URL(url).pathname.slice(6)).replace(/[\/_-]/g,' ') : searchQuery(c)});
-    if(!Array.isArray(result.products))throw new ProviderError('SportsCardsPro search returned an unexpected format.');
-    product=chooseMatch(c,result.products);
-    if(!product)return review('Confirm the exact card, then add its numeric SportsCardsPro ID to the Sheet.',result.products);
+    const storedCandidates=(Array.isArray(e.candidates)?e.candidates:[]).map(p=>({id:p.id,'product-name':p.title,'console-name':p.set}));
+    let products=storedCandidates;
+    product=chooseMatch(c,products);
+    if(!product) {
+      const primary=await api.get('products',{q:url ? searchFromURL(url) : searchQuery(c)});
+      if(!Array.isArray(primary.products))throw new ProviderError('SportsCardsPro search returned an unexpected format.');
+      products=primary.products;
+      product=chooseMatch(c,products);
+    }
+    if(!product) {
+      const secondaryQuery=alternateSearchQuery(c);
+      if(secondaryQuery && secondaryQuery !== (url ? searchFromURL(url) : searchQuery(c))) {
+        const secondary=await api.get('products',{q:secondaryQuery});
+        if(Array.isArray(secondary.products)) products=[...new Map([...products,...secondary.products].map(p=>[String(p.id),p])).values()];
+        product=chooseMatch(c,products);
+      }
+    }
+    if(!product)return review('SportsCardsPro found possible matches, but none was confident enough to link automatically. Review the candidates in the popup.',products);
     product=await api.get('product',{id:String(product.id)});
-    if(!matchesCard(c,product))return review('Product details did not confirm the search match.');
+    const confirmed=chooseMatch(c,[product]);
+    if(!confirmed)return review('SportsCardsPro search narrowed this card down, but the final product details were still ambiguous.',[product,...products]);
   }
-  return refreshEntry(base,product,now);
+  return {...refreshEntry(base,product,now),matcherVersion:MATCHER_VERSION,candidates:[]};
   } catch(error) {
     if(!error.lookupNotFound)throw error;
-    return {...base,state:'review',reason:'SportsCardsPro could not find this card lookup (404). Confirm or correct its product ID in the popup.'+(validPrice(base.ungraded)?' The previous saved price is retained.':''),retryAt:now+30*DAY,lookupNotFound:true};
+    return {...base,state:'review',reason:'SportsCardsPro could not find this card lookup (404). Confirm or correct its product ID in the popup.'+(validPrice(base.ungraded)?' The previous saved price is retained.':''),retryAt:now+30*DAY,lookupNotFound:true,matcherVersion:MATCHER_VERSION};
   }
 }
 // Injected dependencies make batch recovery and API limits testable without credentials.
