@@ -608,7 +608,7 @@ function renderMarketSyncStatus() {
   if($("market-progress-bar"))$("market-progress-bar").style.width=`${total ? Math.min(100,100*Number(s.matchedRows||0)/total):0}%`;
   if($("market-progress-detail"))$("market-progress-detail").textContent=`${Number(s.priceIdsProcessed||0)} processed this batch · ${Number(s.apiCallsThisRun||0)} API requests`;
   const deferred=Number(s.transientDeferred||0);
-  const detail=!s.configured?"Add SPORTSCARDSPRO_API_TOKEN to production Functions, then deploy v31.":s.error?s.error:s.running?"Updating SportsCardsPro prices. You can close this page.":`${valued.toLocaleString()} of ${total.toLocaleString()} rows valued · ${review.toLocaleString()} need review · ${due.toLocaleString()} due${deferred?` · ${deferred.toLocaleString()} temporary ${deferred===1?'request':'requests'} deferred`:''}${s.phase==='partial'?' · Automatically resumes within ten minutes':''}`;
+  const detail=!s.configured?"Add SPORTSCARDSPRO_API_TOKEN to production Functions, then deploy v31.":s.error?s.error:s.running?"Updating SportsCardsPro prices. You can close this page.":`${valued.toLocaleString()} of ${total.toLocaleString()} rows valued · ${review.toLocaleString()} need review · ${due.toLocaleString()} queued${deferred?` · ${deferred.toLocaleString()} temporary ${deferred===1?'request':'requests'} deferred`:''}${s.phase==='partial'?' · Smart matching continues automatically':''}`;
   setMarketProviderStatus(!s.configured||s.error?"error":s.running?"syncing":"connected",detail);
 }
 async function loadPersistentMarketIndex({ rerender = false } = {}) {
@@ -800,21 +800,102 @@ function setOptions(id, values, label) {
   if (sorted.includes(current)) el.value = current;
 }
 
+const WEEK_MS = 7 * 86400000;
+function weeklyBaseline(data, target = Date.now() - WEEK_MS) {
+  const points = (data?.history || [])
+    .map(point => ({ time: Date.parse(point.date), value: Number(point.numericPrice) }))
+    .filter(point => Number.isFinite(point.time) && Number.isFinite(point.value) && point.value > 0)
+    .sort((a,b) => a.time - b.time);
+  const prior = points.filter(point => point.time <= target).pop();
+  return prior?.value ?? NaN;
+}
+function signedMoney(value) {
+  const n = Number(value);
+  if (!Number.isFinite(n)) return "—";
+  const formatted = new Intl.NumberFormat("en-US", {
+    style: "currency", currency: "USD", minimumFractionDigits: 0, maximumFractionDigits: 2
+  }).format(Math.abs(n));
+  return `${n > 0 ? "+" : n < 0 ? "−" : ""}${formatted}`;
+}
+function moverThumbHtml(row) {
+  const data = imageDataFor(row);
+  if (data?.imageUrl) {
+    return `<img src="${escapeHtml(data.imageUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer" onerror="this.parentElement.textContent='${escapeHtml(initials(titleFor(row)))}'">`;
+  }
+  return `<span>${escapeHtml(initials(titleFor(row)))}</span>`;
+}
+function marketMovers() {
+  const grouped = new Map();
+  rows.forEach((row,index) => {
+    const key = marketKey(row);
+    if (!grouped.has(key)) grouped.set(key,{row,index,qty:0});
+    grouped.get(key).qty += quantity(row);
+  });
+  const movers=[];
+  for (const [key,item] of grouped) {
+    const data=marketGridSummaries[key]||{};
+    const current=priceOrNaN(data.ungraded);
+    const previous=weeklyBaseline(data);
+    if (!Number.isFinite(current) || !Number.isFinite(previous) || previous <= 0) continue;
+    const delta=current-previous;
+    if (!delta) continue;
+    movers.push({...item,current,previous,delta,percent:(delta/previous)*100,impact:delta*item.qty});
+  }
+  return movers;
+}
+function renderMarketMovers() {
+  const section=$("market-movers"), rowEl=$("market-movers-row"), coverage=$("market-movers-coverage");
+  if(!section||!rowEl)return;
+  const movers=marketMovers();
+  const risers=movers.filter(m=>m.impact>0).sort((a,b)=>b.impact-a.impact).slice(0,3);
+  const fallers=movers.filter(m=>m.impact<0).sort((a,b)=>a.impact-b.impact).slice(0,3);
+  const selected=[...risers,...fallers];
+  section.classList.remove("hidden");
+  if(!selected.length){
+    if(coverage)coverage.textContent='Waiting for 7-day price history';
+    rowEl.innerHTML='<div class="movers-empty">Market movers will appear here once the catalog has two price snapshots at least seven days apart.</div>';
+    return;
+  }
+  if(coverage)coverage.textContent=`${movers.length.toLocaleString()} cards with a 7-day comparison`;
+  rowEl.innerHTML=selected.map(m=>{
+    const positive=m.impact>0;
+    const direction=positive?'up':'down';
+    return `<button class="mover-card ${direction}" type="button" data-mover-index="${m.index}" aria-label="Open ${escapeHtml(titleFor(m.row))}">
+      <span class="mover-thumb">${moverThumbHtml(m.row)}</span>
+      <span class="mover-copy"><strong>${escapeHtml(titleFor(m.row))}</strong><small>${escapeHtml(metaLine(m.row))}${m.qty>1?` · ×${m.qty}`:''}</small></span>
+      <span class="mover-change ${direction}"><b>${positive?'↑':'↓'} ${Math.abs(m.percent).toFixed(1)}%</b><small>${signedMoney(m.impact)}</small></span>
+    </button>`;
+  }).join('');
+  rowEl.querySelectorAll('[data-mover-index]').forEach(button=>button.addEventListener('click',()=>openDetails(Number(button.dataset.moverIndex))));
+}
 function updateStats() {
   const cardCount = rows.reduce((sum,r) => sum + quantity(r), 0);
 
   let totalValue = 0;
   let valuedCopies = 0;
+  let comparableCurrent = 0;
+  let comparablePrevious = 0;
+  let comparableCopies = 0;
 
   for (const row of rows) {
-    const manual=manualGradeEntries[marketKey(row)];
+    const key=marketKey(row);
+    const manual=manualGradeEntries[key];
     const selected=manual?.prices?.[manual.selectedGrade];
-    const rawValue = manual?.applyToCollection&&typeof selected==='number'?selected:priceOrNaN(marketGridSummaries[marketKey(row)]?.ungraded);
+    const data=marketGridSummaries[key]||{};
+    const usesManual=Boolean(manual?.applyToCollection&&typeof selected==='number');
+    const rawValue = usesManual ? selected : priceOrNaN(data.ungraded);
     if (!Number.isFinite(rawValue)) continue;
 
     const qty = quantity(row);
     totalValue += rawValue * qty;
     valuedCopies += qty;
+
+    const prior=usesManual ? rawValue : weeklyBaseline(data);
+    if(Number.isFinite(prior) && prior > 0){
+      comparableCurrent += rawValue * qty;
+      comparablePrevious += prior * qty;
+      comparableCopies += qty;
+    }
   }
 
   const totalCost = rows.reduce((sum,r) =>
@@ -823,6 +904,24 @@ function updateStats() {
   $("stat-cards").textContent = cardCount.toLocaleString();
   $("stat-value").textContent = manualGradesReady?(valuedCopies?money(totalValue):"—"):"Unavailable";
   $("stat-cost").textContent = totalCost ? money(totalCost) : "—";
+
+  const changeEl=$("stat-value-change");
+  if(changeEl){
+    changeEl.classList.remove('positive','negative','neutral');
+    if(comparablePrevious>0){
+      const delta=comparableCurrent-comparablePrevious;
+      const pct=100*delta/comparablePrevious;
+      const klass=delta>0?'positive':delta<0?'negative':'neutral';
+      const arrow=delta>0?'↑':delta<0?'↓':'→';
+      changeEl.classList.add(klass);
+      changeEl.textContent=`${arrow} ${Math.abs(pct).toFixed(1)}% · ${signedMoney(delta)} vs. 7 days ago`;
+      changeEl.title=`Based on ${comparableCopies.toLocaleString()} card copies with a 7-day comparison.`;
+    }else{
+      changeEl.classList.add('neutral');
+      changeEl.textContent='Building 7-day history';
+      changeEl.title='A 7-day change will appear after older market snapshots are available.';
+    }
+  }
 
   const valueCard = document.getElementById("stat-value")?.closest(".stat-card");
   const costCard = document.getElementById("stat-cost")?.closest(".stat-card");
@@ -843,6 +942,7 @@ function updateStats() {
     stats.style.gridTemplateColumns =
       `repeat(${Math.max(1, visibleCards)}, 1fr)`;
   }
+  renderMarketMovers();
 }
 
 function updatePlaceholdersForKey(key, imageData) {
@@ -1583,6 +1683,9 @@ function openDetails(index) {
   if (!$("card-dialog").open) {
     $("card-dialog").showModal();
   }
+
+  // Recent sales now begin loading automatically as soon as the card opens.
+  if (!recentSalesState.has(index)) loadRecentSales(index);
 }
 
 async function loadCards() {
@@ -1660,6 +1763,24 @@ async function loadCards() {
   }
 }
 
+function applyTheme(theme, {save = true} = {}) {
+  const next = theme === "dark" ? "dark" : "light";
+  document.documentElement.dataset.theme = next;
+  if (save) {
+    try { localStorage.setItem("football-card-theme", next); } catch {}
+  }
+  const button = $("theme-toggle");
+  const label = $("theme-toggle-label");
+  const icon = $("theme-toggle-icon");
+  if (button) button.setAttribute("aria-label", next === "dark" ? "Switch to light mode" : "Switch to dark mode");
+  if (label) label.textContent = next === "dark" ? "Light" : "Dark";
+  if (icon) icon.textContent = next === "dark" ? "☀" : "◐";
+  const meta = document.querySelector('meta[name="theme-color"]');
+  if (meta) meta.setAttribute("content", next === "dark" ? "#1b1b1b" : "#f4f3f2");
+}
+
+applyTheme(document.documentElement.dataset.theme || "light", {save:false});
+
 $("site-title").textContent = CONFIG.siteTitle;
 document.title = CONFIG.siteTitle;
 
@@ -1690,6 +1811,9 @@ $("clear-filters").addEventListener("click", () => {
   render();
 });
 
+$("theme-toggle")?.addEventListener("click", () => {
+  applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+});
 $("market-sync-btn").addEventListener("click", startMarketSync);
 $("refresh-btn").addEventListener("click", loadCards);
 $("dialog-close").addEventListener("click", () => {

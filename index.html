@@ -3,13 +3,19 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#f6f5f9" />
+  <meta name="theme-color" content="#f4f3f2" />
   <title>Football Card Archive</title>
   <link rel="icon" type="image/png" href="/favicon.png" />
   <link rel="apple-touch-icon" href="/favicon.png" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Barlow+Condensed:wght@600;700;800&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script>
+    try {
+      const savedTheme = localStorage.getItem("football-card-theme");
+      document.documentElement.dataset.theme = savedTheme === "dark" ? "dark" : "light";
+    } catch { document.documentElement.dataset.theme = "light"; }
+  </script>
   <link rel="stylesheet" href="/style.css" />
 </head>
 <body>
@@ -22,7 +28,8 @@
       </div>
     </div>
     <div class="header-actions">
-      <button id="market-sync-btn" class="button secondary" type="button">Sync Market</button>
+      <button id="theme-toggle" class="button secondary theme-toggle" type="button" aria-label="Switch color theme"><span id="theme-toggle-icon" aria-hidden="true">◐</span><span id="theme-toggle-label">Dark</span></button>
+      <button id="market-sync-btn" class="button primary" type="button">Sync Market</button>
       <button id="refresh-btn" class="button secondary" type="button">Refresh Sheet</button>
     </div>
   </header>
@@ -62,14 +69,26 @@
         <span class="stat-label">Cards</span>
         <strong id="stat-cards">—</strong>
       </article>
-      <article class="stat-card">
+      <article class="stat-card collection-value-card">
         <span class="stat-label">Collection Value</span>
         <strong id="stat-value">—</strong>
+        <span id="stat-value-change" class="stat-change neutral">Building 7-day history</span>
       </article>
       <article class="stat-card">
         <span class="stat-label">Total Cost</span>
         <strong id="stat-cost">—</strong>
       </article>
+    </section>
+
+    <section id="market-movers" class="market-movers" aria-label="Seven day market movers">
+      <div class="market-movers-heading">
+        <div>
+          <span class="stat-label">7-Day Market Movers</span>
+          <h3>Biggest risers & fallers</h3>
+        </div>
+        <span id="market-movers-coverage" class="market-movers-coverage"></span>
+      </div>
+      <div id="market-movers-row" class="market-movers-row"></div>
     </section>
 
     <section class="controls">

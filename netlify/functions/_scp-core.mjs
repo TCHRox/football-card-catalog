@@ -51,7 +51,7 @@ export function sourceURL(v) {
   catch{return '';}
 }
 export const signature = c => JSON.stringify([c.productId||'',c.url||'']);
-export const MATCHER_VERSION = 38;
+export const MATCHER_VERSION = 40;
 function normalizedSet(v) {return words(v).replace(/^football cards?\s*/,'').replace(/\bpanini\b/g,'').replace(/\bdonruss optics\b/g,'donruss optic').replace(/\s+/g,' ').trim();}
 const splitWords = v => words(v).split(' ').filter(Boolean);
 const overlap = (a,b) => {
@@ -243,15 +243,18 @@ export async function processCard(c,state,api,now=Date.now()) {
     const storedCandidates=(Array.isArray(e.candidates)?e.candidates:[]).map(p=>({id:p.id,'product-name':p.title,'console-name':p.set}));
     let products=storedCandidates;
     product=chooseMatch(c,products);
-    if(!product) {
-      const primary=await api.get('products',{q:url ? searchFromURL(url) : searchQuery(c)});
+    const primaryQuery=url ? searchFromURL(url) : searchQuery(c);
+    // v37 already saved the original search candidates. Repeating that same search for
+    // every review card wastes API calls, so only perform it when no candidates exist.
+    if(!product && !storedCandidates.length) {
+      const primary=await api.get('products',{q:primaryQuery});
       if(!Array.isArray(primary.products))throw new ProviderError('SportsCardsPro search returned an unexpected format.');
       products=primary.products;
       product=chooseMatch(c,products);
     }
     if(!product) {
       const secondaryQuery=alternateSearchQuery(c);
-      if(secondaryQuery && secondaryQuery !== (url ? searchFromURL(url) : searchQuery(c))) {
+      if(secondaryQuery && secondaryQuery !== primaryQuery) {
         const secondary=await api.get('products',{q:secondaryQuery});
         if(Array.isArray(secondary.products)) products=[...new Map([...products,...secondary.products].map(p=>[String(p.id),p])).values()];
         product=chooseMatch(c,products);
@@ -269,7 +272,7 @@ export async function processCard(c,state,api,now=Date.now()) {
   }
 }
 // Injected dependencies make batch recovery and API limits testable without credentials.
-export async function runBatch(s,{cardsLoader=loadCards,token=process.env.SPORTSCARDSPRO_API_TOKEN,now=Date.now,clientFactory=client,maxCalls=180,maxMs=240000}={}) {
+export async function runBatch(s,{cardsLoader=loadCards,token=process.env.SPORTSCARDSPRO_API_TOKEN,now=Date.now,clientFactory=client,maxCalls=300,maxMs=420000}={}) {
   const lease=await acquireLease(s,now());if(!lease)return {busy:true};
   let state;
   try {

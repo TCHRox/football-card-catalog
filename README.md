@@ -32,7 +32,7 @@ Deploy all supplied files to the existing Netlify site. No new environment varia
 
 Open a card and use Confirm this card (or Card match on already matched cards). Candidate IDs are clickable SportsCardsPro searches using the candidate set/title. Enter the numeric product ID, click Save card ID, and enter the existing catalog admin password. Saving requires a successful Netlify response.
 
-IDs are stored persistently in Netlify Blobs, independent of the weekly worker's pricing state. They survive redeploys on the same site and take precedence over Sheet ID/URL fields. The Sheet is not modified. New corrections are prioritized when the next batch starts (normally within ten minutes, subject to provider error cooldowns). A currently running batch may finish first. An old price is hidden while a different saved ID awaits verification. Saved means the mapping was stored, not that SportsCardsPro has verified that ID yet. Correct a mistaken ID using the same field.
+IDs are stored persistently in Netlify Blobs, independent of the weekly worker's pricing state. They survive redeploys on the same site and take precedence over Sheet ID/URL fields. The Sheet is not modified. New corrections are prioritized when the next batch starts (normally immediately after the current batch, with the ten-minute schedule as a fallback). A currently running batch may finish first. An old price is hidden while a different saved ID awaits verification. Saved means the mapping was stored, not that SportsCardsPro has verified that ID yet. Correct a mistaken ID using the same field.
 
 Unconfirmed shows entries without an API match or browser-saved ID, including entries awaiting their first match. Successfully saved IDs leave this tab immediately. Cards with a confirmed ID but no available price do not count as unconfirmed.
 
@@ -73,7 +73,7 @@ SportsCardsPro Collector integration for ungraded prices. Based on the represent
 
 ## Automatic updates
 
-A scheduled function checks for new or due cards every ten minutes. Prices are cached for seven days, so opening a card never makes a paid pricing request. Work is split into resumable batches with at least 1.2 seconds between API requests. Initial matching of thousands of cards can take several hours or overnight. It continues with the browser closed, subject to your Netlify account limits and scheduled/background Functions availability.
+A scheduled function checks for new or due cards every ten minutes as a safety net. A manual Sync Market now chains resumable background batches automatically until the due queue is drained, while keeping at least 1.2 seconds between SportsCardsPro requests. Prices remain cached for seven days, so opening a card never makes a paid pricing request. Large initial matching runs can still take hours because of the provider rate limit, but no repeated button clicks are required.
 
 Existing prices survive temporary API failures. Authentication/configuration errors pause retries for six hours; other failures pause for fifteen minutes. The status reports when to retry. Netlify usage is separate from the $6 SportsCardsPro subscription; this package does not guarantee zero hosting charges.
 
