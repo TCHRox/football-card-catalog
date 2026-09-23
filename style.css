@@ -2391,3 +2391,42 @@ html[data-theme="dark"]{
   .catalog-content .controls .search-wrap{grid-column:auto}
   .catalog-content .catalog{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
 }
+
+
+/* v46 — muted terracotta accent + visible copy counts */
+:root,
+html[data-theme="light"]{
+  --accent:#c96842;
+  --accent-strong:#ad4f30;
+  --accent-soft:#f7e5de;
+  --accent-faint:#fcf6f3;
+}
+html[data-theme="dark"]{
+  --accent:#df7b57;
+  --accent-strong:#ee916e;
+  --accent-soft:rgba(223,123,87,.16);
+  --accent-faint:rgba(223,123,87,.075);
+}
+.card-model-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  width:100%;
+  min-width:0;
+}
+.card-model-row .card-model{
+  min-width:0;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.card-copy-count{
+  flex:0 0 auto;
+  color:var(--accent-strong);
+  font-size:11px;
+  font-weight:800;
+  letter-spacing:.02em;
+  white-space:nowrap;
+}
+html[data-theme="dark"] .card-copy-count{color:var(--accent)}

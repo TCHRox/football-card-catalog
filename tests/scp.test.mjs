@@ -38,7 +38,7 @@ test('snapshots are daily deduplicated and reset for a different product',()=>{
 });
 test('Google Sheet inherits names, quantities and reads appended mappings',()=>{
  const headers=['First','Last','Year','RC','Brand','Type','Number','Qty','I','J','K','L','M','N','Notes','SportsCardsPro ID','SportsCardsPro URL'];
- const r=['Troy','Aikman','1989','Y','Score','Base','270','2','','','','','','','','123',''];
+ const r=['Troy','Aikman','1989','Y','Score','Base','270','x2','','','','','','','','123',''];
  const cards=sheetCards(headers.join(',')+'\n'+r.join(',')+'\n'+['','','1990','N','Score','Base','1','1'].join(','));
  assert.equal(cards[0].productId,'123');assert.equal(cards[1].player,'Troy Aikman');assert.equal(cards[0].quantity,2);
  assert.throws(()=>sheetCards('<html>login</html>'));

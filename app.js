@@ -208,8 +208,11 @@ function money(value) {
 }
 
 function quantity(row) {
-  const q = parseInt(field(row, "quantity"), 10);
-  return Number.isFinite(q) && q > 0 ? q : 1;
+  const raw = String(field(row, "quantity") || "").trim();
+  if (!raw) return 1;
+  const multiplier = raw.match(/[x×]\s*(\d+)/i);
+  const numeric = multiplier ? Number(multiplier[1]) : Number((raw.match(/\d+/) || [])[0]);
+  return Number.isFinite(numeric) && numeric > 0 ? Math.floor(numeric) : 1;
 }
 
 function titleFor(row) {
@@ -848,7 +851,7 @@ function render() {
           ${metaLine(row) ? `<div class="card-meta">${escapeHtml(metaLine(row))}</div>` : ""}
           <h3 class="card-name">${escapeHtml(titleFor(row))}</h3>
           ${activeView==='confidence' ? `<span class="confidence-card-chip ${confidenceForRow(row)}">${confidenceForRow(row)==='low'?'Low':'Medium'} confidence</span>` : ''}
-          ${sub || notes ? `<div class="card-subtitle card-description"><span class="card-model">${escapeHtml(sub)}</span>${notes ? `<span class="card-notes" title="${escapeHtml(notes)}">${escapeHtml(notes)}</span>` : ""}</div>` : ""}
+          ${sub || notes || quantity(row) > 1 ? `<div class="card-subtitle card-description"><span class="card-model-row"><span class="card-model">${escapeHtml(sub)}</span>${quantity(row) > 1 ? `<span class="card-copy-count">x${quantity(row)}</span>` : ""}</span>${notes ? `<span class="card-notes" title="${escapeHtml(notes)}">${escapeHtml(notes)}</span>` : ""}</div>` : ""}
           <div class="card-bottom card-bottom-market">
             <div class="card-market-block"
               data-grid-market-key="${escapeHtml(marketKey(row))}">

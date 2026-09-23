@@ -9,6 +9,7 @@ export const norm = v => String(v ?? '').trim().toLowerCase().replace(/[’']/g,
 export const words = v => norm(v).normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
 export const cardKey = c => [c.year,c.brand,c.player,c.number,c.type,/^(y|yes|true|1|rc)$/i.test(c.rookie) ? 'rookie':'',c.notes].map(norm).join('|');
 export const validPrice = v => typeof v === 'number' && Number.isFinite(v) && v > 0;
+export const parseQuantity = v => { const raw=String(v??'').trim(); if(!raw)return 1; const m=raw.match(/[x×]\s*(\d+)/i); const n=m?Number(m[1]):Number((raw.match(/\d+/)||[])[0]); return Number.isFinite(n)&&n>0?Math.floor(n):1; };
 export const cents = v => v === null || v === undefined || String(v).trim() === '' || !/^\d+$/.test(String(v)) || Number(v) <= 0 ? null : Number(v)/100;
 export const store = () => getStore({name:STORE,consistency:'strong'});
 export const blankState = () => ({entries:{},status:{},lastRequestAt:0});
@@ -34,7 +35,7 @@ export function sheetCards(csv) {
   for(const [i,r] of matrix.entries()) {
     if(!r.some(c=>String(c).trim()))continue;
     if(r[0]?.trim())first=r[0].trim();if(r[1]?.trim())last=r[1].trim();
-    const c={player:[first,last].filter(Boolean).join(' '),year:r[2]?.trim()||'',rookie:r[3]?.trim()||'',brand:r[4]?.trim()||'',type:r[5]?.trim()||'',number:r[6]?.trim()||'',quantity:Math.max(1,parseInt(r[7],10)||1),notes:r[14]?.trim()||'',rowNumber:i+2,productId:idCol>=0 ? r[idCol]?.trim()||'':'',url:urlCol>=0 ? r[urlCol]?.trim()||'':''};
+    const c={player:[first,last].filter(Boolean).join(' '),year:r[2]?.trim()||'',rookie:r[3]?.trim()||'',brand:r[4]?.trim()||'',type:r[5]?.trim()||'',number:r[6]?.trim()||'',quantity:parseQuantity(r[7]),notes:r[14]?.trim()||'',rowNumber:i+2,productId:idCol>=0 ? r[idCol]?.trim()||'':'',url:urlCol>=0 ? r[urlCol]?.trim()||'':''};
     if(c.player && c.year && c.brand && c.number){c.key=cardKey(c);cards.push(c);}
   }
   if(!cards.length)throw new Error('No usable card rows found in Google Sheets.');
