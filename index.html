@@ -41,7 +41,27 @@
     <button id="recently-added-tab" class="nav-tab"><span>Recently Added</span><span id="recently-added-count">0</span></button>
     <button id="duplicates-tab" class="nav-tab"><span>Duplicates</span><span id="duplicates-count">0</span></button>
     <button id="watchlist-tab" class="nav-tab"><span>♡ Watchlist</span><span id="watchlist-count">0</span></button>
-    <div id="sidebar-filters"><h3>Refine collection</h3></div><p class="sidebar-note">Your collection. Every detail.<br>Watchlist saved in this browser.</p></aside><main class="shell"><div class="collection-heading"><div class="eyebrow">COLLECTION OVERVIEW</div><h2 id="collection-title">All Cards</h2><p id="collection-subtitle" class="collection-subtitle">Browse, track and value your personal football card archive.</p></div>
+    <div id="sidebar-filters"><h3>Refine collection</h3></div><p class="sidebar-note">Your collection. Every detail.<br>Watchlist saved in this browser.</p>
+    <section class="catalog-status sidebar-live-status">
+      <div>
+        <div class="eyebrow">LIVE CATALOG</div>
+        <p id="status-line">Connecting to Google Sheets…</p>
+        <p id="image-status-line" class="image-status-line">Image search: checking connection…</p>
+        <p id="market-status-line" class="image-status-line">Market values: checking database…</p>
+        <div id="market-progress-wrap" class="market-progress-wrap hidden" aria-live="polite">
+          <div class="market-progress-track">
+            <div id="market-progress-bar" class="market-progress-bar"></div>
+          </div>
+          <div id="market-progress-detail" class="market-progress-detail"></div>
+        </div>
+      </div>
+      <div class="status-pills">
+        <div class="sync-pill" id="market-sync-pill"><span class="status-dot"></span><span id="market-sync-text">Market checking</span></div>
+        <div class="sync-pill" id="image-sync-pill"><span class="status-dot"></span><span id="image-sync-text">Images checking</span></div>
+        <div class="sync-pill" id="sync-pill"><span class="status-dot"></span><span id="sync-text">Connecting</span></div>
+      </div>
+    </section>
+  </aside><main class="shell"><div class="collection-heading"><div class="eyebrow">COLLECTION OVERVIEW</div><h2 id="collection-title">All Cards</h2><p id="collection-subtitle" class="collection-subtitle">Browse, track and value your personal football card archive.</p></div>
 
 
     <section class="stats" aria-label="Collection summary">
@@ -94,34 +114,6 @@
       <div id="market-movers-row" class="market-movers-row"></div>
     </section>
 
-    <section class="catalog-status">
-      <div>
-        <div class="eyebrow">LIVE CATALOG</div>
-        <p id="status-line">Connecting to Google Sheets…</p>
-        <p id="image-status-line" class="image-status-line">Image search: checking connection…</p>
-        <p id="market-status-line" class="image-status-line">Market values: checking database…</p>
-        <div id="market-progress-wrap" class="market-progress-wrap hidden" aria-live="polite">
-          <div class="market-progress-track">
-            <div id="market-progress-bar" class="market-progress-bar"></div>
-          </div>
-          <div id="market-progress-detail" class="market-progress-detail"></div>
-        </div>
-      </div>
-      <div class="status-pills">
-        <div class="sync-pill" id="market-sync-pill">
-          <span class="status-dot"></span>
-          <span id="market-sync-text">Market checking</span>
-        </div>
-        <div class="sync-pill" id="image-sync-pill">
-          <span class="status-dot"></span>
-          <span id="image-sync-text">Images checking</span>
-        </div>
-        <div class="sync-pill" id="sync-pill">
-          <span class="status-dot"></span>
-          <span id="sync-text">Connecting</span>
-        </div>
-      </div>
-    </section>
 
     <section class="controls">
       <label class="search-wrap">

@@ -2089,3 +2089,165 @@ html[data-theme="dark"]{
   .catalog{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
   .card-image-wrap{height:220px}
 }
+
+/* v44 — wider dashboard, larger player cards, sidebar live status */
+.archive-layout{
+  grid-template-columns:270px minmax(0,1fr);
+}
+.archive-sidebar{
+  display:flex;
+  flex-direction:column;
+  top:76px;
+  height:calc(100vh - 76px);
+  padding:28px 18px 18px;
+  overflow-y:auto;
+}
+#sidebar-filters{flex:0 0 auto}
+.sidebar-note{margin-bottom:18px}
+.sidebar-live-status{
+  display:block;
+  margin:auto 0 0;
+  padding:14px;
+  border:1px solid var(--line);
+  border-left:3px solid var(--accent);
+  border-radius:14px;
+  background:var(--panel-2);
+  box-shadow:none;
+  flex:0 0 auto;
+}
+.sidebar-live-status>div:first-child{width:100%}
+.sidebar-live-status .eyebrow{
+  display:block!important;
+  margin:0 0 7px;
+  font-size:9px;
+}
+.sidebar-live-status p{
+  margin:3px 0;
+  font-size:10px;
+  line-height:1.35;
+}
+.sidebar-live-status #market-status-line{
+  margin-top:6px;
+  font-size:11px;
+  line-height:1.35;
+}
+.sidebar-live-status .market-progress-wrap{
+  width:100%;
+  margin-top:8px;
+}
+.sidebar-live-status .status-pills{
+  display:grid;
+  grid-template-columns:1fr;
+  gap:6px;
+  margin-top:10px;
+}
+.sidebar-live-status .sync-pill{
+  width:100%;
+  padding:6px 8px;
+  font-size:9px;
+  justify-content:flex-start;
+}
+.sidebar-live-status .status-dot{
+  width:6px;
+  height:6px;
+  flex:0 0 6px;
+}
+
+.shell{
+  width:100%;
+  max-width:none;
+  padding:34px 34px 46px;
+}
+.collection-heading,
+.stats,
+.quick-tabs,
+.confidence-filter,
+.market-movers,
+.controls,
+.results-bar,
+.pagination,
+.catalog{
+  width:100%;
+  max-width:none;
+}
+.collection-heading{max-width:900px}
+
+.stats{
+  gap:18px;
+}
+.stat-card{
+  min-height:154px;
+}
+
+.market-movers{
+  width:100%;
+}
+
+.controls{
+  grid-template-columns:minmax(360px,1.4fr) repeat(3,minmax(160px,.42fr));
+}
+
+.catalog{
+  grid-template-columns:repeat(auto-fill,minmax(230px,1fr));
+  gap:22px;
+}
+.card{
+  min-width:0;
+}
+.card-image-wrap{
+  height:325px;
+}
+.card-image{
+  padding:12px;
+}
+.card-body{
+  padding:18px;
+}
+.card-name{
+  font-size:1.28rem;
+}
+.card-meta{
+  font-size:10px;
+}
+.card-subtitle{
+  font-size:.8rem;
+  min-height:36px;
+}
+.card-market-price{
+  font-size:1rem;
+}
+
+.pagination{
+  justify-content:flex-start;
+}
+
+/* Keep the theme toggle readable and compact. */
+.theme-toggle{
+  color:var(--text)!important;
+  min-width:90px;
+}
+
+@media (min-width:1600px){
+  .catalog{grid-template-columns:repeat(auto-fill,minmax(245px,1fr));}
+  .card-image-wrap{height:345px;}
+}
+@media (max-width:1250px){
+  .catalog{grid-template-columns:repeat(auto-fill,minmax(215px,1fr));}
+  .card-image-wrap{height:300px;}
+  .controls{grid-template-columns:minmax(300px,1fr) repeat(2,minmax(150px,.45fr));}
+}
+@media (max-width:950px){
+  .archive-layout{grid-template-columns:215px minmax(0,1fr);}
+  .archive-sidebar{padding:24px 14px 16px;}
+  .shell{padding:28px 22px 40px;}
+  .catalog{grid-template-columns:repeat(auto-fill,minmax(200px,1fr));}
+  .card-image-wrap{height:280px;}
+}
+@media (max-width:700px){
+  .archive-sidebar{display:flex;height:auto;overflow:visible;}
+  .sidebar-live-status{order:99;width:100%;margin-top:10px;}
+  .sidebar-live-status .status-pills{grid-template-columns:repeat(3,minmax(0,1fr));}
+  .sidebar-live-status .sync-pill{justify-content:center;}
+  .catalog{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
+  .card-image-wrap{height:230px;}
+}
