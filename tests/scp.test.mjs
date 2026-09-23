@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {cardKey,cents,chooseMatch,matchesCard,signature,refreshEntry,blankState,runBatch,client,ProviderError,DAY,sourceURL,processCard,sheetCards,acquireLease,releaseLease,publicEntries,bypassLegacyCooldown,due,MATCHER_VERSION} from '../netlify/functions/_scp-core.mjs';
+import {cardKey,cents,chooseMatch,matchesCard,signature,refreshEntry,blankState,runBatch,client,ProviderError,DAY,sourceURL,processCard,sheetCards,acquireLease,releaseLease,publicEntries,bypassLegacyCooldown,due,MATCHER_VERSION,matchConfidence} from '../netlify/functions/_scp-core.mjs';
 const now=Date.UTC(2026,8,21);
 const row={player:'Troy Aikman',year:'1989',brand:'Score',number:'270',type:'Base',rookie:'Y',notes:'',productId:'',url:''};row.key=cardKey(row);
 const product={id:'123', 'product-name':'Troy Aikman #270','console-name':'Football Cards 1989 Score','loose-price':325};
@@ -158,4 +158,17 @@ test('v37 bypasses obsolete v36 transient cooldowns but keeps new outage cooldow
  assert.equal(bypassLegacyCooldown({error:'SportsCardsPro request timed out or could not connect. Saved prices are retained.'}),true);
  assert.equal(bypassLegacyCooldown({error:'SportsCardsPro returned an unreadable response (HTTP 500).'}),true);
  assert.equal(bypassLegacyCooldown({error:'SportsCardsPro had several temporary connection failures. Saved prices are retained and syncing will retry automatically.'}),false);
+});
+
+
+test('match confidence distinguishes manual, strong, and weaker automatic matches',()=>{
+ const manual=matchConfidence(row,product,[],true);assert.equal(manual.confidence,'high');
+ const strong=matchConfidence(row,product,[product],false);assert.equal(strong.confidence,'high');
+ const weaker={...product,'console-name':'Football Cards 1989 Score Supplemental'};
+ assert.equal(matchConfidence(row,weaker,[weaker],false).confidence,'low');
+});
+
+test('public entries expose confidence without internal signatures',()=>{
+ const result=publicEntries({entries:{x:{...refreshEntry({},product,now),confidence:'medium',matchScore:101,matchLead:9,inputSignature:'private'}}});
+ assert.equal(result.x.confidence,'medium');assert.equal(result.x.matchScore,101);assert.equal(result.x.matchLead,9);assert.equal(result.x.inputSignature,undefined);
 });

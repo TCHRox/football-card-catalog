@@ -73,6 +73,7 @@ let customEditorOpen = false;
 let marketGridSummaries = {};
 let marketSyncStatus = {};
 let marketPollTimer = null;
+let firstSeenIndex = {};
 
 const $ = (id) => document.getElementById(id);
 const norm = (s) => String(s ?? "")
@@ -435,17 +436,61 @@ function searchable(row) {
   return Object.values(row).join(" ").toLowerCase();
 }
 
+const RECENT_WINDOW_MS = 30 * 86400000;
+function isRecentlyAdded(row){
+  const seen=Number(firstSeenIndex[marketKey(row)]||0);
+  return seen>0 && Date.now()-seen<=RECENT_WINDOW_MS;
+}
+function isDuplicate(row){return quantity(row)>1;}
+function overlapRatio(a,b){
+  const aa=[...new Set(String(a||'').split(/\s+/).filter(Boolean))],bb=[...new Set(String(b||'').split(/\s+/).filter(Boolean))];
+  if(!aa.length||!bb.length)return 0;
+  const bs=new Set(bb);return aa.filter(x=>bs.has(x)).length/Math.max(aa.length,bb.length);
+}
+function confidenceForRow(row){
+  const data=marketGridSummaries[marketKey(row)]||{};
+  if(data.manualId)return 'high';
+  if(['low','medium','high'].includes(data.confidence))return data.confidence;
+  if(!data.id||!data.title)return '';
+  const clean=v=>norm(v).normalize('NFKD').replace(/[\u0300-\u036f]/g,'').replace(/[^a-z0-9]+/g,' ').trim();
+  const normalizedSet=v=>clean(v).replace(/^football cards?\s*/,'').replace(/\bpanini\b/g,'').replace(/\bdonruss optics\b/g,'donruss optic').replace(/\s+/g,' ').trim();
+  const title=String(data.title||'');
+  const set=String(data.set||'');
+  const expectedPlayer=clean(fullName(row));
+  const actualPlayer=clean(title.replace(/\[[^\]]*\]/g,'').replace(/#.*$/,'').replace(/\b(rc|rookie card)\b/ig,''));
+  const expectedNumber=clean(field(row,'cardNumber').replace(/^\s*#\s*/,''));
+  const actualNumber=clean((title.match(/#\s*([a-z0-9-]+)/i)||[])[1]||'');
+  const actualYear=(set.match(/\b(19|20)\d{2}\b/)||[])[0]||'';
+  const expectedSet=normalizedSet([field(row,'year'),brandFor(row)].join(' '));
+  const actualSet=normalizedSet(set);
+  const descriptor=clean([!['','base','base set','parallel','insert','subset'].includes(norm(cardTypeFor(row)))?cardTypeFor(row):'',field(row,'notes')].filter(Boolean).join(' '));
+  const variant=clean((title.match(/\[([^\]]+)\]/)||[])[1]||'');
+  let score=0;
+  score += actualNumber===expectedNumber?45:-40;
+  const po=overlapRatio(actualPlayer,expectedPlayer);score+=actualPlayer===expectedPlayer?28:po>=.86?16:po>=.65?8:-24;
+  score += actualYear===field(row,'year')?12:(actualYear?-18:0);
+  const so=overlapRatio(actualSet.replace(/^\b(19|20)\d{2}\b\s*/,''),expectedSet.replace(/^\b(19|20)\d{2}\b\s*/,''));score+=actualSet===expectedSet?20:so>=.86?14:so>=.6?8:-12;
+  if(descriptor){const vo=Math.max(overlapRatio(variant,descriptor),overlapRatio(clean(actualSet+' '+variant),descriptor));score+=variant===descriptor?18:vo>=.86?12:vo>=.6?6:(variant?-14:-8);}else score+=variant?-8:8;
+  if(score<90)return 'low';
+  if(score<108||actualSet!==expectedSet||(descriptor&&variant!==descriptor))return 'medium';
+  return 'high';
+}
 function filteredRows() {
   let filtered = [...rows];
-  if(unconfirmedOnly) filtered=filtered.filter(isUnconfirmed);
-  if(watchlistOnly) filtered=filtered.filter(r=>watchlist.has(marketKey(r)));
+  if(activeView==='unconfirmed') filtered=filtered.filter(isUnconfirmed);
+  if(activeView==='watchlist') filtered=filtered.filter(r=>watchlist.has(marketKey(r)));
+  if(activeView==='recent') filtered=filtered.filter(isRecentlyAdded);
+  if(activeView==='duplicates') filtered=filtered.filter(isDuplicate);
+  if(activeView==='confidence') filtered=filtered.filter(r=>confidenceForRow(r)===confidenceLevel);
+  if(activeView==='high-value') filtered=filtered.filter(r=>Number.isFinite(priceOrNaN(marketGridSummaries[marketKey(r)]?.ungraded)));
   const q = norm($("search").value);
   const year = $("year-filter").value;
 
   if (q) filtered = filtered.filter(r => searchable(r).includes(q));
   if (year) filtered = filtered.filter(r => field(r, "year") === year);
 
-  switch ($("sort").value) {
+  const sortMode=activeView==='high-value'?'value-desc':$("sort").value;
+  switch (sortMode) {
     case "player-asc":
       filtered.sort((a,b) => titleFor(a).localeCompare(titleFor(b)));
       break;
@@ -758,6 +803,7 @@ function render() {
         <div class="card-body">
           ${metaLine(row) ? `<div class="card-meta">${escapeHtml(metaLine(row))}</div>` : ""}
           <h3 class="card-name">${escapeHtml(titleFor(row))}</h3>
+          ${activeView==='confidence' ? `<span class="confidence-card-chip ${confidenceForRow(row)}">${confidenceForRow(row)==='low'?'Low':'Medium'} confidence</span>` : ''}
           ${sub || notes ? `<div class="card-subtitle card-description"><span class="card-model">${escapeHtml(sub)}</span>${notes ? `<span class="card-notes" title="${escapeHtml(notes)}">${escapeHtml(notes)}</span>` : ""}</div>` : ""}
           <div class="card-bottom card-bottom-market">
             <div class="card-market-block"
@@ -786,6 +832,9 @@ function render() {
   document.querySelectorAll("[data-favorite]").forEach(button=>button.addEventListener("click",event=>{event.stopPropagation();toggleFavorite(Number(button.dataset.favorite));}));
   $("watchlist-count").textContent=watchlist.size;
   $("unconfirmed-count").textContent=rows.filter(isUnconfirmed).length;
+  $("low-confidence-count").textContent=rows.filter(r=>confidenceForRow(r)==='low').length;
+  $("recently-added-count").textContent=rows.filter(isRecentlyAdded).length;
+  $("duplicates-count").textContent=rows.filter(isDuplicate).length;
   renderPagination(totalPages, totalEntries);
   setupAutoImageLoading();
 }
@@ -898,12 +947,13 @@ function updateStats() {
     }
   }
 
-  const totalCost = rows.reduce((sum,r) =>
-    sum + moneyNumber(field(r,"purchasePrice")) * quantity(r), 0);
+  const unconfirmedCount=rows.filter(isUnconfirmed).length;
+  const duplicateCopies=rows.reduce((sum,row)=>sum+Math.max(0,quantity(row)-1),0);
 
   $("stat-cards").textContent = cardCount.toLocaleString();
   $("stat-value").textContent = manualGradesReady?(valuedCopies?money(totalValue):"—"):"Unavailable";
-  $("stat-cost").textContent = totalCost ? money(totalCost) : "—";
+  $("stat-unconfirmed").textContent = unconfirmedCount.toLocaleString();
+  $("stat-duplicates").textContent = duplicateCopies.toLocaleString();
 
   const changeEl=$("stat-value-change");
   if(changeEl){
@@ -924,26 +974,10 @@ function updateStats() {
   }
 
   const valueCard = document.getElementById("stat-value")?.closest(".stat-card");
-  const costCard = document.getElementById("stat-cost")?.closest(".stat-card");
-
   if (valueCard) {
-    valueCard.style.display = "";
     valueCard.title = valuedCopies
       ? `Based on ${valuedCopies.toLocaleString()} valued card copies`
       : "Market values have not been synced yet";
-  }
-
-  if (costCard) costCard.style.display = mapping.purchasePrice ? "" : "none";
-
-  const stats = document.querySelector(".stats");
-  if (stats) {
-    const visibleCards = Array.from(stats.querySelectorAll(".stat-card"))
-      .filter(card => card.style.display !== "none").length;
-    stats.style.gridTemplateColumns = visibleCards >= 3
-      ? "minmax(0,1.65fr) minmax(190px,.72fr) minmax(190px,.72fr)"
-      : visibleCards === 2
-        ? "minmax(0,1.65fr) minmax(210px,.75fr)"
-        : "1fr";
   }
   renderMarketMovers();
 }
@@ -1723,6 +1757,7 @@ async function loadCards() {
     customImageIndex = customIndex || {};
     marketGridSummaries = marketPayload?.summaries || {};
     marketSyncStatus = marketPayload?.status || {};
+    firstSeenIndex = payload.firstSeen || {};
 
     const sourceRows = payload.rows || [];
     if (!sourceRows.length) throw new Error("The sheet connected, but no card rows were found.");
@@ -1762,7 +1797,8 @@ async function loadCards() {
     $("error-state").classList.remove("hidden");
     $("stat-cards").textContent = "—";
     $("stat-value").textContent = "—";
-    $("stat-cost").textContent = "—";
+    $("stat-unconfirmed").textContent = "—";
+    $("stat-duplicates").textContent = "—";
   }
 }
 
@@ -1779,7 +1815,7 @@ function applyTheme(theme, {save = true} = {}) {
   if (label) label.textContent = next === "dark" ? "Light" : "Dark";
   if (icon) icon.textContent = next === "dark" ? "☀" : "◐";
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute("content", next === "dark" ? "#15121d" : "#f6f4fb");
+  if (meta) meta.setAttribute("content", next === "dark" ? "#141516" : "#f5f6f7");
 }
 
 applyTheme(document.documentElement.dataset.theme || "light", {save:false});
@@ -1805,7 +1841,7 @@ $("page-size").addEventListener("change", () => {
 });
 
 $("clear-filters").addEventListener("click", () => {
-  setWatchlist(false);
+  setActiveView('all');
   $("search").value = "";
   $("year-filter").value = "";
   $("sort").value = "sheet";
@@ -1841,14 +1877,53 @@ document.addEventListener("paste", event => {
   uploadCustomImage(activeDetailIndex, file);
 });
 
-let watchlistOnly=false,unconfirmedOnly=false;
+let activeView='all',confidenceLevel='low';
 function isUnconfirmed(row){const d=marketGridSummaries[marketKey(row)]||{};return d.state==='review'||(!d.id&&!d.manualId);}
 let watchlist;try{watchlist=new Set(JSON.parse(localStorage.getItem('football-watchlist-v1')||'[]'));}catch{watchlist=new Set();}
 function toggleFavorite(index){const key=marketKey(rows[index]);const next=new Set(watchlist);next.has(key)?next.delete(key):next.add(key);try{localStorage.setItem('football-watchlist-v1',JSON.stringify([...next]));watchlist=next;render();}catch{alert('Your browser could not save the watchlist. Check browser storage settings.');}}
-function setWatchlist(only){unconfirmedOnly=false;$("unconfirmed-tab").classList.remove("active");watchlistOnly=only;currentPage=1;$('watchlist-tab').classList.toggle('active',only);$('all-cards-tab').classList.toggle('active',!only);$('collection-title').textContent=only?'Watchlist':'All cards';render();}
-$('watchlist-tab').onclick=()=>setWatchlist(true);
-$('all-cards-tab').onclick=()=>setWatchlist(false);
-$('unconfirmed-tab').onclick=()=>{setWatchlist(false);unconfirmedOnly=true;$('all-cards-tab').classList.remove('active');$('unconfirmed-tab').classList.add('active');$('collection-title').textContent='Unconfirmed cards';render();};
+const VIEW_COPY={
+ all:['All Cards','Browse, track and value your personal football card archive.'],
+ unconfirmed:['Unconfirmed','Cards that still need a verified SportsCardsPro match.'],
+ confidence:['Low Confidence','Review cards that were linked automatically but may deserve a second look.'],
+ recent:['Recently Added','Cards first detected in your collection within the last 30 days.'],
+ duplicates:['Duplicates','Cards where you own more than one copy.'],
+ watchlist:['Watchlist','Cards you have saved for quick access on this device.'],
+ 'high-value':['High Value','Your valued cards, automatically ordered from highest to lowest.']
+};
+function setActiveView(view){
+  activeView=view;currentPage=1;
+  const sidebar={all:'all-cards-tab',unconfirmed:'unconfirmed-tab',confidence:'low-confidence-tab',recent:'recently-added-tab',duplicates:'duplicates-tab',watchlist:'watchlist-tab'};
+  Object.values(sidebar).forEach(id=>$(id)?.classList.remove('active','parent-active'));
+  if(sidebar[view])$(sidebar[view])?.classList.add('active');
+  $('unconfirmed-tab')?.classList.toggle('parent-active',view==='confidence');
+  const quick={all:'quick-all',watchlist:'quick-watchlist',recent:'quick-recent','high-value':'quick-high-value'};
+  Object.values(quick).forEach(id=>$(id)?.classList.remove('active'));
+  if(quick[view])$(quick[view])?.classList.add('active');
+  const copy=VIEW_COPY[view]||VIEW_COPY.all;
+  $('collection-title').textContent=copy[0];
+  $('collection-subtitle').textContent=view==='confidence'
+    ? `${confidenceLevel==='low'?'Low':'Medium'} confidence SportsCardsPro matches. Use the card popup to verify or relink anything questionable.`
+    : copy[1];
+  $('confidence-filter')?.classList.toggle('hidden',view!=='confidence');
+  if(view==='high-value')$('sort').value='value-desc';
+  render();
+}
+$('all-cards-tab').onclick=()=>setActiveView('all');
+$('unconfirmed-tab').onclick=()=>setActiveView('unconfirmed');
+$('low-confidence-tab').onclick=()=>setActiveView('confidence');
+$('recently-added-tab').onclick=()=>setActiveView('recent');
+$('duplicates-tab').onclick=()=>setActiveView('duplicates');
+$('watchlist-tab').onclick=()=>setActiveView('watchlist');
+$('quick-all').onclick=()=>setActiveView('all');
+$('quick-watchlist').onclick=()=>setActiveView('watchlist');
+$('quick-recent').onclick=()=>setActiveView('recent');
+$('quick-high-value').onclick=()=>setActiveView('high-value');
+$('confidence-low').onclick=()=>{confidenceLevel='low';$('confidence-low').classList.add('active');$('confidence-medium').classList.remove('active');setActiveView('confidence');};
+$('confidence-medium').onclick=()=>{confidenceLevel='medium';$('confidence-medium').classList.add('active');$('confidence-low').classList.remove('active');setActiveView('confidence');};
+$('stat-unconfirmed-card')?.addEventListener('click',()=>setActiveView('unconfirmed'));
+$('stat-unconfirmed-card')?.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setActiveView('unconfirmed');}});
+$('stat-duplicates-card')?.addEventListener('click',()=>setActiveView('duplicates'));
+$('stat-duplicates-card')?.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setActiveView('duplicates');}});
 for(const [id,label] of [['year-filter','Year'],['sort','Sort by'],['page-size','Show']]){const wrap=document.createElement('label');wrap.className='sidebar-field';wrap.textContent=label;wrap.appendChild($(id));$('sidebar-filters').appendChild(wrap);}
 const grades=['7','8','9','9.5','PSA 10'];
 let manualGradeEntries={},manualGradesReady=false;

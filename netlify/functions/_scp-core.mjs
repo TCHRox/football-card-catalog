@@ -137,6 +137,19 @@ export function candidateSummary(c,products) {
     .slice(0,5)
     .map(({product,score})=>({id:String(product.id),title:product['product-name'],set:product['console-name'],score}));
 }
+export function matchConfidence(c,product,products=[],explicit=false) {
+  if(explicit)return {confidence:'high',matchScore:null,matchLead:null};
+  const current=scoreMatch(c,product);
+  const others=[...new Map((products||[]).map(p=>[String(p.id),p])).values()]
+    .filter(p=>String(p.id)!==String(product.id))
+    .map(p=>scoreMatch(c,p).score)
+    .sort((a,b)=>b-a);
+  const lead=others.length?current.score-others[0]:null;
+  let confidence='high';
+  if(current.score<90 || (lead!==null&&lead<8))confidence='low';
+  else if(current.score<108 || (lead!==null&&lead<15) || !current.exact.set || (descriptorWords(c)&&!current.exact.variant))confidence='medium';
+  return {confidence,matchScore:current.score,matchLead:lead};
+}
 export function refreshEntry(entry,product,now=Date.now()) {
   const amount=cents(product['loose-price']);
   const same=entry?.id===String(product.id);
@@ -150,7 +163,7 @@ export function refreshEntry(entry,product,now=Date.now()) {
   return {...entry,id:String(product.id),title:product['product-name']||'',set:product['console-name']||'',ungraded:amount,checkedAt:now,updatedAt:now,history:history.filter(p=>Date.parse(p.date)>now-400*DAY).slice(-400),source:'SportsCardsPro',lookupNotFound:false,state:validPrice(amount)?'priced':'no-price',reason:validPrice(amount)?'':'SportsCardsPro has no current ungraded price.',url:sourceURL(entry.url),changes:{ungraded:null},retryAt:now+7*DAY};
 }
 export function publicEntries(state) {
-  return Object.fromEntries(Object.entries(state.entries||{}).map(([k,e])=>[k,{ungraded:e.ungraded??null,source:'SportsCardsPro',updatedAt:e.updatedAt||null,checkedAt:e.checkedAt||null,id:e.id||'',title:e.title||'',set:e.set||'',url:sourceURL(e.url),state:e.state,reason:e.reason||'',history:e.history||[],changes:{ungraded:null},candidates:e.candidates||[]}]));
+  return Object.fromEntries(Object.entries(state.entries||{}).map(([k,e])=>[k,{ungraded:e.ungraded??null,source:'SportsCardsPro',updatedAt:e.updatedAt||null,checkedAt:e.checkedAt||null,id:e.id||'',title:e.title||'',set:e.set||'',url:sourceURL(e.url),state:e.state,reason:e.reason||'',history:e.history||[],changes:{ungraded:null},candidates:e.candidates||[],confidence:e.confidence||'',matchScore:e.matchScore??null,matchLead:e.matchLead??null}]));
 }
 export function totals(cards,state,now=Date.now()) {
   const entries=state.entries||{};
@@ -233,6 +246,7 @@ export async function processCard(c,state,api,now=Date.now()) {
   if(c.productId && !/^\d+$/.test(c.productId))return review('SportsCardsPro ID must contain digits only.');
   if(c.url && !url)return review('Use an HTTPS SportsCardsPro /game/ card URL.');
   let product;
+  let matchProducts=[];
   const id=c.productId||e.id;
   try {
   if(id) {
@@ -242,6 +256,7 @@ export async function processCard(c,state,api,now=Date.now()) {
   } else {
     const storedCandidates=(Array.isArray(e.candidates)?e.candidates:[]).map(p=>({id:p.id,'product-name':p.title,'console-name':p.set}));
     let products=storedCandidates;
+    matchProducts=products;
     product=chooseMatch(c,products);
     const primaryQuery=url ? searchFromURL(url) : searchQuery(c);
     // v37 already saved the original search candidates. Repeating that same search for
@@ -250,6 +265,7 @@ export async function processCard(c,state,api,now=Date.now()) {
       const primary=await api.get('products',{q:primaryQuery});
       if(!Array.isArray(primary.products))throw new ProviderError('SportsCardsPro search returned an unexpected format.');
       products=primary.products;
+      matchProducts=products;
       product=chooseMatch(c,products);
     }
     if(!product) {
@@ -257,6 +273,7 @@ export async function processCard(c,state,api,now=Date.now()) {
       if(secondaryQuery && secondaryQuery !== primaryQuery) {
         const secondary=await api.get('products',{q:secondaryQuery});
         if(Array.isArray(secondary.products)) products=[...new Map([...products,...secondary.products].map(p=>[String(p.id),p])).values()];
+        matchProducts=products;
         product=chooseMatch(c,products);
       }
     }
@@ -265,7 +282,8 @@ export async function processCard(c,state,api,now=Date.now()) {
     const confirmed=chooseMatch(c,[product]);
     if(!confirmed)return review('SportsCardsPro search narrowed this card down, but the final product details were still ambiguous.',[product,...products]);
   }
-  return {...refreshEntry(base,product,now),matcherVersion:MATCHER_VERSION,candidates:[]};
+  const confidence=matchConfidence(c,product,matchProducts,Boolean(c.productId||url));
+  return {...refreshEntry(base,product,now),matcherVersion:MATCHER_VERSION,candidates:[],...confidence};
   } catch(error) {
     if(!error.lookupNotFound)throw error;
     return {...base,state:'review',reason:'SportsCardsPro could not find this card lookup (404). Confirm or correct its product ID in the popup.'+(validPrice(base.ungraded)?' The previous saved price is retained.':''),retryAt:now+30*DAY,lookupNotFound:true,matcherVersion:MATCHER_VERSION};

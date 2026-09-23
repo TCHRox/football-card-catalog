@@ -1,5 +1,40 @@
+import { getStore } from "@netlify/blobs";
 const SHEET_ID = "1ZelpNWlXQHIzmDCVSDv1TMYEuh-eua6SKUtsESqlmeI";
 const SHEET_GID = "1796597612";
+
+const norm = v => String(v ?? "").trim().toLowerCase().replace(/[’']/g,"").replace(/[()]/g,"").replace(/\s+/g," ");
+const marketKeyFromCols = (cols, state) => {
+  const first=String(cols[0]??"").trim();
+  const last=String(cols[1]??"").trim();
+  if(first) state.first=first;
+  if(last) state.last=last;
+  const player=[state.first,state.last].filter(Boolean).join(" ").trim();
+  const year=String(cols[2]??"").trim();
+  const rookie=/^(y|yes|true|1|rc)$/i.test(String(cols[3]??"").trim())?"rookie":"";
+  const brand=String(cols[4]??"").trim();
+  const type=String(cols[5]??"").trim();
+  const number=String(cols[6]??"").trim();
+  const notes=String(cols[14]??"").trim();
+  if(!player||!year||!brand||!number)return "";
+  return [year,brand,player,number,type,rookie,notes].map(norm).join("|");
+};
+async function firstSeenMap(dataRows){
+  try{
+    const store=getStore({name:"football-card-catalog-meta-v42",consistency:"strong"});
+    const saved=await store.get("first-seen-v1",{type:"json"})||{};
+    const now=Date.now();
+    const initialBaseline=Object.keys(saved).length===0;
+    const firstTimestamp=initialBaseline ? now-31*86400000 : now;
+    const state={first:"",last:""};
+    let changed=false;
+    for(const cols of dataRows){
+      const key=marketKeyFromCols(cols,state);
+      if(key&&!saved[key]){saved[key]=firstTimestamp;changed=true;}
+    }
+    if(changed)await store.setJSON("first-seen-v1",saved);
+    return saved;
+  }catch{return {};}
+}
 
 function parseCSV(text) {
   const rows = [];
@@ -75,17 +110,20 @@ export default async () => {
       return seen[h] === 1 ? h : `${h} ${seen[h]}`;
     });
 
-    const rows = matrix.slice(1).map(cols => {
+    const dataRows = matrix.slice(1);
+    const rows = dataRows.map(cols => {
       const obj = {};
       headers.forEach((header, i) => obj[header] = cols[i] ?? "");
       return obj;
     }).filter(obj => Object.values(obj).some(v => String(v).trim() !== ""));
+    const firstSeen = await firstSeenMap(dataRows);
 
     return new Response(JSON.stringify({
       sheetId: SHEET_ID,
       gid: SHEET_GID,
       headers,
       rows,
+      firstSeen,
       fetchedAt: new Date().toISOString()
     }), {
       status: 200,
