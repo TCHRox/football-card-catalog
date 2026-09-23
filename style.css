@@ -2251,3 +2251,143 @@ html[data-theme="dark"]{
   .catalog{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px;}
   .card-image-wrap{height:230px;}
 }
+
+/* v45 — compact overview cards + inline card filters */
+.stats{
+  width:min(1080px,100%);
+  max-width:1080px;
+  grid-template-columns:repeat(4,minmax(0,1fr))!important;
+}
+.stat-card{
+  min-height:142px;
+  padding:20px 20px 18px;
+}
+.stat-card strong{font-size:35px}
+.collection-value-card strong{font-size:42px}
+
+/* Market movers now intentionally sits before the quick-view tabs. */
+.market-movers{margin-bottom:12px}
+.quick-tabs{margin-top:0;margin-bottom:18px}
+
+.browse-workspace{
+  display:grid;
+  grid-template-columns:190px minmax(0,1fr);
+  gap:22px;
+  align-items:start;
+  width:100%;
+}
+.catalog-filter-panel{
+  position:sticky;
+  top:94px;
+  padding:16px 14px;
+  border:1px solid var(--line);
+  border-radius:16px;
+  background:var(--panel);
+  box-shadow:0 8px 22px rgba(24,28,33,.035);
+}
+.catalog-filter-heading{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding-bottom:12px;
+  margin-bottom:14px;
+  border-bottom:1px solid var(--line);
+}
+.catalog-filter-heading h3{
+  font-family:Inter,system-ui,sans-serif!important;
+  font-size:15px;
+  letter-spacing:-.02em;
+}
+.catalog-filter-heading .text-button{
+  padding:0;
+  font-size:10px;
+}
+.filter-group{
+  margin:0 0 18px;
+  padding:0;
+  border:0;
+}
+.filter-group legend,
+.filter-select-label{
+  display:block;
+  margin:0 0 9px;
+  padding:0;
+  color:var(--text);
+  font-size:11px;
+  font-weight:750;
+}
+.filter-check{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-height:30px;
+  color:var(--muted);
+  font-size:11px;
+  cursor:pointer;
+}
+.filter-check input{
+  width:15px;
+  height:15px;
+  min-height:0;
+  margin:0;
+  padding:0;
+  accent-color:var(--accent);
+}
+.filter-check:has(input:checked){color:var(--text);font-weight:650}
+.catalog-filter-panel select{
+  min-height:40px;
+  margin:0 0 17px;
+  padding:0 10px;
+  border-radius:9px;
+  font-size:11px;
+  background:var(--panel-2);
+}
+.catalog-content{min-width:0}
+.catalog-content .controls{
+  display:grid;
+  grid-template-columns:minmax(320px,1fr) minmax(150px,190px) minmax(135px,165px);
+  gap:10px;
+  align-items:center;
+  margin-bottom:8px;
+}
+.catalog-content .results-bar,
+.catalog-content .pagination,
+.catalog-content .catalog{
+  width:100%;
+  max-width:none;
+}
+.catalog-content .catalog{
+  grid-template-columns:repeat(auto-fill,minmax(230px,1fr));
+  gap:20px;
+}
+
+@media(max-width:1350px){
+  .stats{max-width:980px}
+  .browse-workspace{grid-template-columns:175px minmax(0,1fr);gap:18px}
+  .catalog-content .catalog{grid-template-columns:repeat(auto-fill,minmax(215px,1fr))}
+}
+@media(max-width:1050px){
+  .stats{grid-template-columns:repeat(2,minmax(0,1fr))!important;max-width:760px}
+  .browse-workspace{grid-template-columns:160px minmax(0,1fr)}
+  .catalog-content .controls{grid-template-columns:1fr 160px}
+  .catalog-content .controls .search-wrap{grid-column:1/-1}
+}
+@media(max-width:800px){
+  .browse-workspace{display:block}
+  .catalog-filter-panel{position:static;margin-bottom:14px;display:grid;grid-template-columns:1fr 1fr;gap:12px 16px}
+  .catalog-filter-heading{grid-column:1/-1;margin-bottom:0}
+  .filter-group{margin-bottom:0}
+  .catalog-filter-panel select{margin-bottom:0}
+  .catalog-content .catalog{grid-template-columns:repeat(auto-fill,minmax(205px,1fr))}
+}
+@media(max-width:600px){
+  .stats{grid-template-columns:1fr 1fr!important;width:100%}
+  .stat-card{min-height:108px;padding:15px}
+  .stat-card strong,.collection-value-card strong{font-size:27px}
+  .catalog-filter-panel{grid-template-columns:1fr}
+  .catalog-filter-heading{grid-column:auto}
+  .catalog-content .controls{grid-template-columns:1fr}
+  .catalog-content .controls .search-wrap{grid-column:auto}
+  .catalog-content .catalog{grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+}

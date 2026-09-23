@@ -475,6 +475,43 @@ function confidenceForRow(row){
   if(score<108||actualSet!==expectedSet||(descriptor&&variant!==descriptor))return 'medium';
   return 'high';
 }
+function noteFilterFlags(row){
+  const notes=norm(field(row,'notes'));
+  return {
+    rookie:isRookie(row)||/\b(?:rc|rookie|rookie card)\b/.test(notes),
+    autograph:/\b(?:auto|autograph|autographed|signed|signature)\b/.test(notes),
+    jersey:/\b(?:jersey|relic|patch|memorabilia|game[- ]?used|game[- ]?worn|player[- ]?worn)\b/.test(notes),
+    multiplayer:/\b(?:multi[- ]?player|dual|triple|quad|two[- ]?player|three[- ]?player|four[- ]?player)\b/.test(notes)
+  };
+}
+function gradeForRow(row){
+  const manual=manualGradeEntries[marketKey(row)]||{};
+  if(manual.selectedGrade)return String(manual.selectedGrade);
+  const notes=norm(field(row,'notes'));
+  if(/\bpsa\s*10\b/.test(notes))return 'PSA 10';
+  const match=notes.match(/\b(?:grade|graded)\s*(9\.5|9|8|7)\b/);
+  return match?.[1]||'Ungraded';
+}
+function selectedTypeFilters(){
+  return [
+    ['rookie',$('filter-rookie')?.checked],
+    ['autograph',$('filter-autograph')?.checked],
+    ['jersey',$('filter-jersey')?.checked],
+    ['multiplayer',$('filter-multiplayer')?.checked]
+  ].filter(([,on])=>on).map(([name])=>name);
+}
+function clearCatalogFilters({keepView=false}={}){
+  if(!keepView)setActiveView('all');
+  $('search').value='';
+  $('year-filter').value='';
+  $('grade-filter').value='';
+  $('sort').value='sheet';
+  $('page-size').value=String(CONFIG.defaultPageSize);
+  for(const id of ['filter-rookie','filter-autograph','filter-jersey','filter-multiplayer'])if($(id))$(id).checked=false;
+  currentPage=1;
+  render();
+}
+
 function filteredRows() {
   let filtered = [...rows];
   if(activeView==='unconfirmed') filtered=filtered.filter(isUnconfirmed);
@@ -485,9 +522,16 @@ function filteredRows() {
   if(activeView==='high-value') filtered=filtered.filter(r=>Number.isFinite(priceOrNaN(marketGridSummaries[marketKey(r)]?.ungraded)));
   const q = norm($("search").value);
   const year = $("year-filter").value;
+  const grade = $("grade-filter").value;
+  const typeFilters=selectedTypeFilters();
 
   if (q) filtered = filtered.filter(r => searchable(r).includes(q));
   if (year) filtered = filtered.filter(r => field(r, "year") === year);
+  if (grade) filtered = filtered.filter(r => gradeForRow(r) === grade);
+  if(typeFilters.length) filtered=filtered.filter(r=>{
+    const flags=noteFilterFlags(r);
+    return typeFilters.some(type=>flags[type]);
+  });
 
   const sortMode=activeView==='high-value'?'value-desc':$("sort").value;
   switch (sortMode) {
@@ -1771,8 +1815,6 @@ async function loadCards() {
     updateStats();
     setOptions("year-filter", rows.map(r=>field(r,"year")), "All years");
 
-    document.getElementById("team-filter").style.display = "none";
-    document.getElementById("grade-filter").style.display = "none";
 
     render();
     renderMarketSyncStatus();
@@ -1831,6 +1873,18 @@ $("year-filter").addEventListener("change", () => {
   currentPage = 1;
   render();
 });
+$("grade-filter").addEventListener("change", () => {
+  currentPage = 1;
+  render();
+});
+for(const id of ['filter-rookie','filter-autograph','filter-jersey','filter-multiplayer'])$(id)?.addEventListener('change',()=>{currentPage=1;render();});
+$("filter-clear")?.addEventListener("click",()=>{
+  $("year-filter").value="";
+  $("grade-filter").value="";
+  for(const id of ['filter-rookie','filter-autograph','filter-jersey','filter-multiplayer'])if($(id))$(id).checked=false;
+  currentPage=1;
+  render();
+});
 $("sort").addEventListener("change", () => {
   currentPage = 1;
   render();
@@ -1840,15 +1894,7 @@ $("page-size").addEventListener("change", () => {
   render();
 });
 
-$("clear-filters").addEventListener("click", () => {
-  setActiveView('all');
-  $("search").value = "";
-  $("year-filter").value = "";
-  $("sort").value = "sheet";
-  $("page-size").value = String(CONFIG.defaultPageSize);
-  currentPage = 1;
-  render();
-});
+$("clear-filters").addEventListener("click", () => clearCatalogFilters());
 
 $("theme-toggle")?.addEventListener("click", () => {
   applyTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
@@ -1924,7 +1970,6 @@ $('stat-unconfirmed-card')?.addEventListener('click',()=>setActiveView('unconfir
 $('stat-unconfirmed-card')?.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setActiveView('unconfirmed');}});
 $('stat-duplicates-card')?.addEventListener('click',()=>setActiveView('duplicates'));
 $('stat-duplicates-card')?.addEventListener('keydown',e=>{if(e.key==='Enter'||e.key===' '){e.preventDefault();setActiveView('duplicates');}});
-for(const [id,label] of [['year-filter','Year'],['sort','Sort by'],['page-size','Show']]){const wrap=document.createElement('label');wrap.className='sidebar-field';wrap.textContent=label;wrap.appendChild($(id));$('sidebar-filters').appendChild(wrap);}
 const grades=['7','8','9','9.5','PSA 10'];
 let manualGradeEntries={},manualGradesReady=false;
 async function loadManualGradeIndex(){try{const r=await fetch('/.netlify/functions/manual-grade-index',{cache:'no-store'});const d=await r.json();if(!r.ok)throw Error();manualGradeEntries=d.entries||{};manualGradesReady=true;}catch{manualGradesReady=false;}}
