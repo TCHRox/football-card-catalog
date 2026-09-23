@@ -1,3 +1,9 @@
+# v37 — Resilient SportsCardsPro syncing
+
+This update changes only the SportsCardsPro sync/recovery behavior. A single temporary connection timeout no longer stops the entire market sync. Each temporary network/server failure is retried once automatically; if it still fails, that card is deferred for 15 minutes and the worker continues with the next card. Three consecutive temporary failures pause the batch for 15 minutes to avoid hammering a provider outage. Saved prices are retained throughout. Authentication failures and rate-limit responses still pause immediately. The exact timeout/unreadable-response cooldown left by v36 is treated as obsolete so v37 can recover immediately after deployment instead of waiting for the old timestamp.
+
+The market status now reports how many temporary requests were deferred. No environment-variable changes are required. Keep `SPORTSCARDSPRO_API_TOKEN`, `CARD_CATALOG_ADMIN_PASSWORD`, `SERPER_API_KEY`, and `PARSE_API_KEY` as before.
+
 # v36 — Selected graded prices and collection valuation
 
 Deploy all supplied files to your existing Netlify site, including the new manual-grade-index function. No new environment variables or subscriptions are needed.

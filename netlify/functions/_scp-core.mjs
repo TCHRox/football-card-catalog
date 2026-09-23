@@ -103,26 +103,61 @@ export async function acquireLease(s,now=Date.now()) {
 }
 export async function releaseLease(s,etag){if(etag)await s.setJSON('lease',{until:0},{onlyIfMatch:etag});}
 export const legacyLookup404 = status => status?.error === 'SportsCardsPro could not complete the request (HTTP 404).';
-export class ProviderError extends Error {constructor(message,status=502){super(message);this.status=status;}}
+export const legacyTransientCooldown = status => /^SportsCardsPro request timed out or could not connect\./.test(String(status?.error||'')) || /^SportsCardsPro returned an unreadable response \(HTTP 5\d\d\)\./.test(String(status?.error||''));
+export const bypassLegacyCooldown = status => legacyLookup404(status) || legacyTransientCooldown(status);
+export class ProviderError extends Error {
+  constructor(message,status=502,{transient=false,rateLimited=false}={}) {
+    super(message);
+    this.status=status;
+    this.transient=transient;
+    this.rateLimited=rateLimited;
+  }
+}
 export function client(token,state,{fetcher=fetch,now=Date.now,sleep=ms=>new Promise(r=>setTimeout(r,ms))}={}) {
   let calls=0;
+  const waitForSlot=async()=>{
+    const delay=Math.max(0,INTERVAL-(now()-Number(state.lastRequestAt||0)));
+    if(delay)await sleep(delay);
+    state.lastRequestAt=now();
+  };
   return { get calls(){return calls;}, async get(path,params) {
-    const delay=Math.max(0,INTERVAL-(now()-Number(state.lastRequestAt||0)));if(delay)await sleep(delay);
-    state.lastRequestAt=now();calls++;
     const url=new URL('https://www.sportscardspro.com/api/'+path);
     url.searchParams.set('t',token);for(const [k,v]of Object.entries(params))url.searchParams.set(k,v);
-    let response;
-    try {response=await fetcher(url,{signal:AbortSignal.timeout(20000),headers:{accept:'application/json'}});}
-    catch{throw new ProviderError('SportsCardsPro request timed out or could not connect. Saved prices are retained.');}
-    let data;try{data=await response.json();}catch{throw new ProviderError(`SportsCardsPro returned an unreadable response (HTTP ${response.status}).`,response.status===200?502:response.status);}
-    if(!response.ok || data.status!=='success') {
-      const status=response.status===200?502:response.status;
-      // Never echo provider bodies, request URLs, or token-bearing exceptions.
-      const error = new ProviderError([401,403].includes(status)?'SportsCardsPro rejected access. Check the production token and Collector API entitlement.':status===429?'SportsCardsPro rate limit reached. The next batch will retry later.':`SportsCardsPro could not complete the request (HTTP ${response.status}).`,status);
-      error.lookupNotFound = status===404;
-      throw error;
+    let lastError;
+    for(let attempt=0;attempt<2;attempt++) {
+      await waitForSlot();calls++;
+      let response;
+      try {response=await fetcher(url,{signal:AbortSignal.timeout(20000),headers:{accept:'application/json'}});}
+      catch {
+        lastError=new ProviderError('SportsCardsPro request timed out or could not connect. Saved prices are retained.',502,{transient:true});
+        if(attempt===0){await sleep(1800);continue;}
+        throw lastError;
+      }
+      let data;
+      try {data=await response.json();}
+      catch {
+        const status=response.status===200?502:response.status;
+        lastError=new ProviderError(`SportsCardsPro returned an unreadable response (HTTP ${response.status}).`,status,{transient:status>=500||status===404});
+        if(attempt===0&&lastError.transient){await sleep(1800);continue;}
+        throw lastError;
+      }
+      if(!response.ok || data.status!=='success') {
+        const status=response.status===200?502:response.status;
+        // Never echo provider bodies, request URLs, or token-bearing exceptions.
+        const error = new ProviderError(
+          [401,403].includes(status)?'SportsCardsPro rejected access. Check the production token and Collector API entitlement.':
+          status===429?'SportsCardsPro rate limit reached. The next batch will retry later.':
+          `SportsCardsPro could not complete the request (HTTP ${response.status}).`,
+          status,
+          {transient:status>=500,rateLimited:status===429}
+        );
+        error.lookupNotFound = status===404;
+        if(attempt===0&&error.transient){lastError=error;await sleep(1800);continue;}
+        throw error;
+      }
+      return data;
     }
-    return data;
+    throw lastError||new ProviderError('SportsCardsPro request could not be completed.',502,{transient:true});
   }};
 }
 export async function processCard(c,state,api,now=Date.now()) {
@@ -163,7 +198,7 @@ export async function runBatch(s,{cardsLoader=loadCards,token=process.env.SPORTS
   try {
     state=await s.get(KEY,{type:'json'})||blankState();
     if(!token)throw new ProviderError('SPORTSCARDSPRO_API_TOKEN is missing in the production Functions environment.',503);
-    if(state.status?.retryAfter>now()&&!legacyLookup404(state.status))return {cooldown:true};
+    if(state.status?.retryAfter>now()&&!bypassLegacyCooldown(state.status))return {cooldown:true};
     const cards=applyMatches(await cardsLoader(),await readMatches(s));
     const keys=new Set(cards.map(c=>c.key));
     for(const k of Object.keys(state.entries))if(!keys.has(k))delete state.entries[k];
@@ -173,24 +208,40 @@ export async function runBatch(s,{cardsLoader=loadCards,token=process.env.SPORTS
     for(const c of cards){if(sigs.has(c.key)&&sigs.get(c.key)!==signature(c))conflicts.add(c.key);sigs.set(c.key,signature(c));}
     const queue=unique.filter(c=>due(c,state.entries[c.key],now())).sort((a,b)=>Number(Boolean(b.productId)&&signature(b)!==state.entries[b.key]?.inputSignature)-Number(Boolean(a.productId)&&signature(a)!==state.entries[a.key]?.inputSignature)||Number(state.entries[a.key]?.retryAt||0)-Number(state.entries[b.key]?.retryAt||0));
     if(!queue.length){state.status={...state.status,running:false,phase:'complete',error:'',...totals(cards,state,now())};await s.setJSON(KEY,state);return {idle:true};}
-    const startedAt=now();const api=clientFactory(token,state);let processed=0,notFoundStreak=0;
-    state.status={...state.status,running:true,phase:'pricing',phaseLabel:'Updating SportsCardsPro prices',startedAt,error:'',...totals(cards,state,now())};
+    const startedAt=now();const api=clientFactory(token,state);let processed=0,notFoundStreak=0,transientStreak=0,transientDeferred=0;
+    state.status={...state.status,running:true,phase:'pricing',phaseLabel:'Updating SportsCardsPro prices',startedAt,error:'',transientDeferred:0,...totals(cards,state,now())};
     await s.setJSON(KEY,state);
     for(const c of queue) {
       if(api.calls>=maxCalls-1 || now()-startedAt>=maxMs)break;
-      if(conflicts.has(c.key))state.entries[c.key]={inputSignature:signature(c),state:'review',reason:'Duplicate Sheet rows have conflicting SportsCardsPro mappings. Make their IDs/URLs agree.',retryAt:now()+30*DAY};
-      else {
-        if(state.entries[c.key] && state.entries[c.key].inputSignature!==signature(c))state.entries[c.key]={state:'pending',inputSignature:signature(c),retryAt:0};
-        state.entries[c.key]=await processCard(c,state,api,now());
+      try {
+        if(conflicts.has(c.key))state.entries[c.key]={inputSignature:signature(c),state:'review',reason:'Duplicate Sheet rows have conflicting SportsCardsPro mappings. Make their IDs/URLs agree.',retryAt:now()+30*DAY};
+        else {
+          if(state.entries[c.key] && state.entries[c.key].inputSignature!==signature(c))state.entries[c.key]={state:'pending',inputSignature:signature(c),retryAt:0};
+          state.entries[c.key]=await processCard(c,state,api,now());
+        }
+        transientStreak=0;
+      } catch(error) {
+        if(error instanceof ProviderError && error.transient && !error.rateLimited && ![401,403].includes(error.status)) {
+          transientStreak++;transientDeferred++;
+          const old=state.entries[c.key]||{};
+          state.entries[c.key]={...old,inputSignature:signature(c),state:old.state||(validPrice(old.ungraded)?'priced':'pending'),reason:old.reason||'Temporary SportsCardsPro connection issue. This card will retry automatically.',retryAt:now()+15*60000};
+          if(transientStreak>=3) {
+            processed++;
+            const current=totals(cards,state,now());
+            state.status={...state.status,...current,running:false,phase:'partial',error:'SportsCardsPro had several temporary connection failures. Saved prices are retained and syncing will retry automatically.',retryAfter:now()+15*60000,transientDeferred,priceIdsTotal:queue.length,priceIdsProcessed:processed,apiCallsThisRun:api.calls,lastCompletedAt:now()};
+            await s.setJSON(KEY,state);
+            return state.status;
+          }
+        } else throw error;
       }
       notFoundStreak=state.entries[c.key]?.lookupNotFound?notFoundStreak+1:0;
       if(notFoundStreak>=5)throw new ProviderError('Five consecutive card lookups were not found. Sync paused to check provider availability; saved prices are retained.',502);
       processed++;
-      state.status={...state.status,...totals(cards,state,now()),priceIdsTotal:queue.length,priceIdsProcessed:processed,apiCallsThisRun:api.calls};
+      state.status={...state.status,...totals(cards,state,now()),transientDeferred,priceIdsTotal:queue.length,priceIdsProcessed:processed,apiCallsThisRun:api.calls};
       if(processed%5===0)await s.setJSON(KEY,state);
     }
     const remaining=totals(cards,state,now());
-    state.status={...state.status,...remaining,running:false,phase:remaining.dueRows?'partial':'complete',lastCompletedAt:now(),apiCallsThisRun:api.calls,error:'',retryAfter:0};
+    state.status={...state.status,...remaining,running:false,phase:remaining.dueRows||transientDeferred?'partial':'complete',lastCompletedAt:now(),apiCallsThisRun:api.calls,transientDeferred,error:'',retryAfter:0};
     await s.setJSON(KEY,state);return state.status;
   } catch(error) {
     state=state||blankState();

@@ -607,7 +607,8 @@ function renderMarketSyncStatus() {
   const total=Number(s.totalRows||rows.length||0), valued=Number(s.valuedRows||0), review=Number(s.unresolvedRows||0), due=Number(s.dueRows||0);
   if($("market-progress-bar"))$("market-progress-bar").style.width=`${total ? Math.min(100,100*Number(s.matchedRows||0)/total):0}%`;
   if($("market-progress-detail"))$("market-progress-detail").textContent=`${Number(s.priceIdsProcessed||0)} processed this batch · ${Number(s.apiCallsThisRun||0)} API requests`;
-  const detail=!s.configured?"Add SPORTSCARDSPRO_API_TOKEN to production Functions, then deploy v31.":s.error?s.error:s.running?"Updating SportsCardsPro prices. You can close this page.":`${valued.toLocaleString()} of ${total.toLocaleString()} rows valued · ${review.toLocaleString()} need review · ${due.toLocaleString()} due${s.phase==='partial'?' · Automatically resumes within ten minutes':''}`;
+  const deferred=Number(s.transientDeferred||0);
+  const detail=!s.configured?"Add SPORTSCARDSPRO_API_TOKEN to production Functions, then deploy v31.":s.error?s.error:s.running?"Updating SportsCardsPro prices. You can close this page.":`${valued.toLocaleString()} of ${total.toLocaleString()} rows valued · ${review.toLocaleString()} need review · ${due.toLocaleString()} due${deferred?` · ${deferred.toLocaleString()} temporary ${deferred===1?'request':'requests'} deferred`:''}${s.phase==='partial'?' · Automatically resumes within ten minutes':''}`;
   setMarketProviderStatus(!s.configured||s.error?"error":s.running?"syncing":"connected",detail);
 }
 async function loadPersistentMarketIndex({ rerender = false } = {}) {

@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {cardKey,cents,chooseMatch,matchesCard,signature,refreshEntry,blankState,runBatch,client,ProviderError,DAY,sourceURL,processCard,sheetCards,acquireLease,releaseLease,publicEntries} from '../netlify/functions/_scp-core.mjs';
+import {cardKey,cents,chooseMatch,matchesCard,signature,refreshEntry,blankState,runBatch,client,ProviderError,DAY,sourceURL,processCard,sheetCards,acquireLease,releaseLease,publicEntries,bypassLegacyCooldown} from '../netlify/functions/_scp-core.mjs';
 const now=Date.UTC(2026,8,21);
 const row={player:'Troy Aikman',year:'1989',brand:'Score',number:'270',type:'Base',rookie:'Y',notes:'',productId:'',url:''};row.key=cardKey(row);
 const product={id:'123', 'product-name':'Troy Aikman #270','console-name':'Football Cards 1989 Score','loose-price':325};
@@ -101,4 +101,40 @@ test('one missing lookup does not block the next card, including a legacy cooldo
 });
 test('JSON provider 404 is card-specific, HTML 404 is not',async()=>{
  for(const jsonBody of [true,false]){const api=client('secret',blankState(),{fetcher:async()=>({status:404,ok:false,json:async()=>{if(!jsonBody)throw Error('HTML');return {status:'error'}}})});await assert.rejects(()=>api.get('products',{q:'card'}),error=>error.status===404&&Boolean(error.lookupNotFound)===jsonBody);}
+});
+
+test('client retries one temporary connection failure before succeeding',async()=>{
+ let clock=now;let attempts=0;const state=blankState();
+ const api=client('secret',state,{now:()=>clock,sleep:async ms=>{clock+=ms;},fetcher:async()=>{attempts++;if(attempts===1)throw new Error('temporary network failure');return new Response(JSON.stringify({status:'success',...product}),{status:200});}});
+ const result=await api.get('product',{id:'123'});
+ assert.equal(result.id,'123');assert.equal(api.calls,2);assert.equal(attempts,2);
+});
+
+test('one temporary provider failure is deferred while later cards continue',async()=>{
+ const first={...row,key:'temporary-first',notes:'temporary',productId:'123'};
+ const second={...row,key:'healthy-second',notes:'healthy',productId:'123'};
+ const s=memoryStore();let calls=0;
+ const factory=()=>({get calls(){return calls;},async get(){calls++;if(calls===1)throw new ProviderError('Temporary connection failure',502,{transient:true});return product;}});
+ const result=await runBatch(s,{token:'test',cardsLoader:async()=>[first,second],now:()=>now,clientFactory:factory});
+ const saved=await s.get('state');
+ assert.equal(saved.entries[first.key].state,'pending');
+ assert.equal(saved.entries[second.key].ungraded,3.25);
+ assert.equal(result.transientDeferred,1);
+ assert.equal(result.error,'');
+ assert.equal(result.phase,'partial');
+});
+
+test('three consecutive temporary provider failures pause the batch safely',async()=>{
+ const rows=Array.from({length:4},(_,i)=>({...row,key:'temp-'+i,notes:'temp '+i,productId:'123'}));
+ const s=memoryStore();let calls=0;
+ const factory=()=>({get calls(){return calls;},async get(){calls++;throw new ProviderError('Temporary connection failure',502,{transient:true});}});
+ const result=await runBatch(s,{token:'test',cardsLoader:async()=>rows,now:()=>now,clientFactory:factory});
+ assert.equal(result.phase,'partial');assert.equal(result.transientDeferred,3);assert.ok(result.retryAfter>now);assert.match(result.error,/temporary connection failures/i);
+});
+
+
+test('v37 bypasses obsolete v36 transient cooldowns but keeps new outage cooldowns',()=>{
+ assert.equal(bypassLegacyCooldown({error:'SportsCardsPro request timed out or could not connect. Saved prices are retained.'}),true);
+ assert.equal(bypassLegacyCooldown({error:'SportsCardsPro returned an unreadable response (HTTP 500).'}),true);
+ assert.equal(bypassLegacyCooldown({error:'SportsCardsPro had several temporary connection failures. Saved prices are retained and syncing will retry automatically.'}),false);
 });
