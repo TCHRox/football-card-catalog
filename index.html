@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#f4f3f2" />
+  <meta name="theme-color" content="#f6f4fb" />
   <title>Football Card Archive</title>
   <link rel="icon" type="image/png" href="/favicon.png" />
   <link rel="apple-touch-icon" href="/favicon.png" />
@@ -34,7 +34,39 @@
     </div>
   </header>
 
-  <div class="archive-layout"><aside class="archive-sidebar"><div class="eyebrow">YOUR ARCHIVE</div><button id="all-cards-tab" class="nav-tab active">All cards</button><button id="watchlist-tab" class="nav-tab">♡ Watchlist <span id="watchlist-count">0</span></button><button id="unconfirmed-tab" class="nav-tab">Unconfirmed <span id="unconfirmed-count">0</span></button><div id="sidebar-filters"><h3>Refine collection</h3></div><p class="sidebar-note">Your collection. Every detail.<br>Watchlist saved in this browser.</p></aside><main class="shell"><div class="collection-heading"><div class="eyebrow">THE COLLECTION</div><h2 id="collection-title">All cards</h2></div>
+  <div class="archive-layout"><aside class="archive-sidebar"><div class="eyebrow">YOUR ARCHIVE</div><button id="all-cards-tab" class="nav-tab active">All cards</button><button id="watchlist-tab" class="nav-tab">♡ Watchlist <span id="watchlist-count">0</span></button><button id="unconfirmed-tab" class="nav-tab">Unconfirmed <span id="unconfirmed-count">0</span></button><div id="sidebar-filters"><h3>Refine collection</h3></div><p class="sidebar-note">Your collection. Every detail.<br>Watchlist saved in this browser.</p></aside><main class="shell"><div class="collection-heading"><div class="eyebrow">COLLECTION OVERVIEW</div><h2 id="collection-title">All cards</h2><p class="collection-subtitle">Browse, track and value your personal football card archive.</p></div>
+
+
+    <section class="stats" aria-label="Collection summary">
+      <article class="stat-card collection-value-card stat-primary">
+        <span class="stat-label">Collection Value</span>
+        <strong id="stat-value">—</strong>
+        <span id="stat-value-change" class="stat-change neutral">Building 7-day history</span>
+        <span class="stat-footnote">Current tracked market value</span>
+      </article>
+      <article class="stat-card stat-secondary">
+        <span class="stat-label">Cards</span>
+        <strong id="stat-cards">—</strong>
+        <span class="stat-footnote">Catalog entries</span>
+      </article>
+      <article class="stat-card stat-secondary">
+        <span class="stat-label">Total Cost</span>
+        <strong id="stat-cost">—</strong>
+        <span class="stat-footnote">Recorded purchase cost</span>
+      </article>
+    </section>
+
+    <section id="market-movers" class="market-movers" aria-label="Seven day market movers">
+      <div class="market-movers-heading">
+        <div>
+          <span class="stat-label">7-Day Market Movers</span>
+          <h3>Biggest risers & fallers</h3>
+        </div>
+        <span id="market-movers-coverage" class="market-movers-coverage"></span>
+      </div>
+      <div id="market-movers-row" class="market-movers-row"></div>
+    </section>
+
     <section class="catalog-status">
       <div>
         <div class="eyebrow">LIVE CATALOG</div>
@@ -62,33 +94,6 @@
           <span id="sync-text">Connecting</span>
         </div>
       </div>
-    </section>
-
-    <section class="stats" aria-label="Collection summary">
-      <article class="stat-card">
-        <span class="stat-label">Cards</span>
-        <strong id="stat-cards">—</strong>
-      </article>
-      <article class="stat-card collection-value-card">
-        <span class="stat-label">Collection Value</span>
-        <strong id="stat-value">—</strong>
-        <span id="stat-value-change" class="stat-change neutral">Building 7-day history</span>
-      </article>
-      <article class="stat-card">
-        <span class="stat-label">Total Cost</span>
-        <strong id="stat-cost">—</strong>
-      </article>
-    </section>
-
-    <section id="market-movers" class="market-movers" aria-label="Seven day market movers">
-      <div class="market-movers-heading">
-        <div>
-          <span class="stat-label">7-Day Market Movers</span>
-          <h3>Biggest risers & fallers</h3>
-        </div>
-        <span id="market-movers-coverage" class="market-movers-coverage"></span>
-      </div>
-      <div id="market-movers-row" class="market-movers-row"></div>
     </section>
 
     <section class="controls">

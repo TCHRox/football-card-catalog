@@ -939,8 +939,11 @@ function updateStats() {
   if (stats) {
     const visibleCards = Array.from(stats.querySelectorAll(".stat-card"))
       .filter(card => card.style.display !== "none").length;
-    stats.style.gridTemplateColumns =
-      `repeat(${Math.max(1, visibleCards)}, 1fr)`;
+    stats.style.gridTemplateColumns = visibleCards >= 3
+      ? "minmax(0,1.65fr) minmax(190px,.72fr) minmax(190px,.72fr)"
+      : visibleCards === 2
+        ? "minmax(0,1.65fr) minmax(210px,.75fr)"
+        : "1fr";
   }
   renderMarketMovers();
 }
@@ -1776,7 +1779,7 @@ function applyTheme(theme, {save = true} = {}) {
   if (label) label.textContent = next === "dark" ? "Light" : "Dark";
   if (icon) icon.textContent = next === "dark" ? "☀" : "◐";
   const meta = document.querySelector('meta[name="theme-color"]');
-  if (meta) meta.setAttribute("content", next === "dark" ? "#1b1b1b" : "#f4f3f2");
+  if (meta) meta.setAttribute("content", next === "dark" ? "#15121d" : "#f6f4fb");
 }
 
 applyTheme(document.documentElement.dataset.theme || "light", {save:false});
